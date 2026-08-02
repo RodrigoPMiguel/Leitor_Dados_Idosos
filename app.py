@@ -655,10 +655,19 @@ with aba_noticias:
         st.markdown(f"### {titulo_doc}")
         if nome_arq.lower().endswith('.pdf'):
             base64_pdf = base64.b64encode(bytes_arquivo).decode('utf-8')
-            pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="650" type="application/pdf" style="border:none;"></iframe>'
+            # Alteração para a tag <embed> para evitar o bloqueio rígido do Chrome
+            pdf_display = f'''
+                <embed src="data:application/pdf;base64,{base64_pdf}" 
+                       width="100%" 
+                       height="650" 
+                       type="application/pdf">
+            '''
             st.markdown(pdf_display, unsafe_allow_html=True)
+            
+            st.info("⚠️ Se o seu navegador bloqueou a visualização do documento acima, utilize o botão abaixo para baixá-lo e abrir diretamente no seu computador.")
+            st.download_button("📥 Baixar PDF", bytes_arquivo, nome_arq, use_container_width=True)
         else:
-            st.info("Visualização em tela cheia disponível para arquivos PDF. Utilize o botão abaixo para baixar/abrir o documento.")
+            st.info("A pré-visualização em tela cheia está disponível apenas para arquivos PDF. Utilize o botão abaixo para baixar o documento.")
             st.download_button("📥 Baixar Documento", bytes_arquivo, nome_arq, use_container_width=True)
             
         st.markdown("---")
