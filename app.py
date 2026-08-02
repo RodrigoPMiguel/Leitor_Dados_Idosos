@@ -1,0 +1,1163 @@
+import streamlit as st
+import pandas as pd
+import sqlite3
+import docx
+import os
+import re
+
+# Configuração da página
+st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="wide")
+
+DB_FILE = "dados_idosos.db"
+
+# --- BANCO DE DADOS SQLITE ---
+def get_connection():
+    return sqlite3.connect(DB_FILE)
+
+def inicializar_banco():
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # 1. Tabela de Conselheiros
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conselheiros (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT, cargo TEXT, telefone TEXT, email TEXT,
+            regiao TEXT, observacoes TEXT, foto BLOB
+        )
+    """)
+    
+    cursor.execute("SELECT COUNT(*) FROM conselheiros")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO conselheiros (nome, cargo, regiao) VALUES ('Francisco Miguel Filho', 'Conselheiro', 'São Paulo')")
+        cursor.execute("INSERT INTO conselheiros (nome, cargo, regiao) VALUES ('Vanessa Nassif', 'Conselheira', 'São Paulo')")
+    
+    # 2. Tabela de Anotações Importantes
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS anotacoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo TEXT, categoria TEXT, conteudo TEXT,
+            data_criacao DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # 3. Tabela do Cronograma Desmembrado
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cronograma_dados (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            distrito TEXT, ano_criacao TEXT, no_mapa TEXT, pop_total TEXT,
+            pop_masc TEXT, pop_fem TEXT, subpref_sn TEXT, cras TEXT, creas TEXT,
+            caei TEXT, nci TEXT, ilpi TEXT, bpc TEXT, rank_vun TEXT,
+            ubs TEXT, ama TEXT, idrpg TEXT, emad TEXT, ursi TEXT, upa TEXT,
+            cdi TEXT, pai TEXT, ceu TEXT, cdc TEXT, ccint TEXT,
+            ilpi_2setor TEXT, cdia TEXT, nci_2setor TEXT, outros_projetos TEXT
+        )
+    """)
+
+    cursor.execute("SELECT COUNT(*) FROM cronograma_dados")
+    if cursor.fetchone()[0] == 0 and os.path.exists("cronograma.docx"):
+        try:
+            doc = docx.Document("cronograma.docx")
+            if len(doc.tables) > 0:
+                table = doc.tables[0]
+                for row in table.rows[3:]:
+                    txts = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
+                    if not txts or len(txts) < 18: continue
+                    distrito = txts[0]
+                    if not distrito or distrito.upper().startswith("ZONA") or distrito.upper().startswith("DISTRITOS"): continue
+                    def sep(val, q=2):
+                        if not val or val == '-' or val == '0-': return ['0'] * q
+                        p = [x.strip() for x in re.split(r'[-–—]', str(val)) if x.strip()]
+                        while len(p) < q: p.append('0')
+                        return p[:q]
+                    
+                    cras, creas = sep(txts[7], 2)
+                    ubs, ama = sep(txts[13], 2)
+                    ursi, upa = sep(txts[16], 2)
+                    cdi, pai = sep(txts[17], 2)
+                    ceu, cdc, ccint = sep(txts[18], 3)
+                    col18 = txts[19] if len(txts) > 19 else ""
+                    ilpi_2, cdia, nci_2 = sep(col18, 3)
+                    col19 = txts[20] if len(txts) > 20 else ""
+                    
+                    cursor.execute("""
+                        INSERT INTO cronograma_dados (
+                            distrito, ano_criacao, no_mapa, pop_total, pop_masc, pop_fem,
+                            subpref_sn, cras, creas, caei, nci, ilpi, bpc, rank_vun,
+                            ubs, ama, idrpg, emad, ursi, upa, cdi, pai, ceu, cdc, ccint,
+                            ilpi_2setor, cdia, nci_2setor, outros_projetos
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (
+                        distrito, txts[1], txts[2], txts[3], txts[4], txts[5], txts[6],
+                        cras, creas, txts[8].replace('-',''), txts[9].replace('-',''), txts[10].replace('-',''),
+                        txts[11], txts[12], ubs, ama, txts[14], txts[15], ursi, upa, cdi, pai,
+                        ceu, cdc, ccint, ilpi_2, cdia, nci_2, col19
+                    ))
+        except Exception:
+            pass
+
+    # 4. Tabela de Subprefeituras
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS subprefeituras_dados (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subprefeitura TEXT, regiao TEXT, ilpi_particular INT, ilpi_conveniada INT,
+            ilpi_nao_conveniada INT, cdi_particular INT, cdi_conveniado INT,
+            nci_conveniado INT, nci_nao_conveniado INT, caei INT, ccinter INT, total INT
+        )
+    """)
+    cursor.execute("SELECT COUNT(*) FROM subprefeituras_dados")
+    if cursor.fetchone()[0] == 0 and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
+        try:
+            df_t = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="TOTAIS").dropna(how="all")
+            if 'Unnamed: 0' in df_t.columns: df_t = df_t.drop(columns=['Unnamed: 0'])
+            for _, r in df_t.iterrows():
+                cursor.execute("""
+                    INSERT INTO subprefeituras_dados (
+                        regiao, subprefeitura, ilpi_particular, ilpi_conveniada, ilpi_nao_conveniada,
+                        cdi_particular, cdi_conveniado, nci_conveniado, nci_nao_conveniado, caei, ccinter, total
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    str(r.get('REGIÃO', '')), str(r.get('SUBPREFEITURA', '')),
+                    int(r.get('ILPI particular', 0) or 0), int(r.get('ILPI conveniada', 0) or 0),
+                    int(r.get('ILPI não conveniada', 0) or 0), int(r.get('CDI particular', 0) or 0),
+                    int(r.get('CDI conveniado', 0) or 0), int(r.get('NCI conveniado', 0) or 0),
+                    int(r.get('NCI não conveniado', 0) or 0), int(r.get('CAEI', 0) or 0),
+                    int(r.get('CCINTER', 0) or 0), int(r.get('TOTAL POR SUBPREF', 0) or 0)
+                ))
+        except Exception:
+            pass
+
+    # 5. Tabela de Registros Base
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS registros_base (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            no_registro TEXT, vigencia TEXT, data TEXT, modalidade TEXT,
+            nome_institucional TEXT, nome_fantasia TEXT, cnpj_matriz TEXT, cnpj_filial TEXT,
+            programa TEXT, res TEXT, convenio TEXT, endereco TEXT, cep TEXT, bairro TEXT,
+            subprefeitura TEXT, regiao TEXT, telefone TEXT, email TEXT, site TEXT,
+            capacidade TEXT, atendidos TEXT, sei TEXT, id_original TEXT
+        )
+    """)
+    cursor.execute("SELECT COUNT(*) FROM registros_base")
+    if cursor.fetchone()[0] == 0 and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
+        try:
+            df_b = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="Base de Dados", header=1).dropna(how="all")
+            for _, r in df_b.iterrows():
+                cursor.execute("""
+                    INSERT INTO registros_base (
+                        no_registro, vigencia, data, modalidade, nome_institucional, nome_fantasia,
+                        cnpj_matriz, cnpj_filial, programa, res, convenio, endereco, cep, bairro,
+                        subprefeitura, regiao, telefone, email, site, capacidade, atendidos, sei, id_original
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    str(r.get('Nº REGISTRO', '')), str(r.get('VIGÊNCIA', '')), str(r.get('DATA', '')),
+                    str(r.get('MODALIDADE', '')), str(r.get('NOME INSTITUCIONAL', '')), str(r.get('NOME FANTASIA', '')),
+                    str(r.get('CNPJ Matriz', '')), str(r.get('CNPJ Filial', '')), str(r.get('PROGRAMA', '')),
+                    str(r.get('RES', '')), str(r.get('CONVÊNIO', '')), str(r.get('ENDEREÇO DO PROGRAMA', '')),
+                    str(r.get('CEP', '')), str(r.get('BAIRRO', '')), str(r.get('SUBPREFEITURA', '')),
+                    str(r.get('REGIÃO', '')), str(r.get('TELEFONE', '')), str(r.get('E-MAIL', '')),
+                    str(r.get('SITE', '')), str(r.get('CAPACIDADE', '')), str(r.get('ATENDIDOS', '')),
+                    str(r.get('SEI', '')), str(r.get('ID', ''))
+                ))
+        except Exception:
+            pass
+
+    # 6. Tabela de Galeria de Imagens/Fotos
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS galeria_fotos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo TEXT, foto BLOB
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+inicializar_banco()
+
+# --- CABEÇALHO COM LOGO ESTICADA E TEXTO ---
+if os.path.exists("logo.png"):
+    st.image("logo.png", use_container_width=True)
+
+st.subheader("Painel Geral de Gestão: Políticas e Atenção ao Idoso - SP")
+st.markdown("---")
+
+# --- ABAS DA APLICAÇÃO ---
+aba_crono, aba_subpref, aba_conselheiros, aba_anotacoes, aba_registros, aba_mapa, aba_sobre = st.tabs([
+    "📋 Cronograma Editável (Distritos)",
+    "🏛️ Subprefeituras (Editável)",
+    "👥 Conselheiros Municipais",
+    "📝 Anotações Importantes",
+    "📌 Registros / Casas de Repouso",
+    "🗺️ Fotos, Mapas e Legendas",
+    "ℹ️ Sobre"
+])
+
+# -------------------------------------------------------------
+# ABA 1: CRONOGRAMA EDITÁVEL
+# -------------------------------------------------------------
+with aba_crono:
+    st.subheader("Editador de Dados do Cronograma por Distrito")
+    
+    conn = get_connection()
+    df_crono_db = pd.read_sql_query("SELECT * FROM cronograma_dados", conn)
+    conn.close()
+
+    with st.expander("🛠️ Gerenciar Colunas (Adicionar / Apagar)"):
+        c_add, c_del = st.columns(2)
+        with c_add:
+            st.markdown("**Adicionar Nova Coluna:**")
+            nova_col = st.text_input("Nome da nova coluna:", key="crono_add_col")
+            if st.button("➕ Adicionar Coluna no Cronograma"):
+                if nova_col and nova_col not in df_crono_db.columns:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(f'ALTER TABLE cronograma_dados ADD COLUMN "{nova_col}" TEXT')
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Coluna '{nova_col}' adicionada com sucesso!")
+                    st.rerun()
+                elif nova_col in df_crono_db.columns:
+                    st.warning("Esta coluna já existe.")
+        
+        with c_del:
+            st.markdown("**Apagar Coluna Existente:**")
+            col_para_apagar = st.selectbox("Selecione a coluna para remover:", [c for c in df_crono_db.columns if c != 'id'], key="crono_del_col")
+            if st.button("🗑️ Apagar Coluna Selecionada", key="btn_del_crono"):
+                if col_para_apagar:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(f'ALTER TABLE cronograma_dados DROP COLUMN "{col_para_apagar}"')
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Coluna '{col_para_apagar}' removida com sucesso!")
+                    st.rerun()
+
+    col_filtro, _ = st.columns([1, 2])
+    with col_filtro:
+        distritos_lista = ["Todos os Distritos"] + sorted(list(df_crono_db['distrito'].dropna().unique()))
+        distrito_selecionado = st.selectbox("🔍 Selecione o Distrito para Filtrar / Editar:", distritos_lista)
+
+    st.info("💡 Você pode editar qualquer célula diretamente na tabela abaixo e clicar em 'Salvar Alterações'.")
+
+    df_exibicao = df_crono_db[df_crono_db['distrito'] == distrito_selecionado] if distrito_selecionado != "Todos os Distritos" else df_crono_db
+    edited_crono = st.data_editor(df_exibicao, num_rows="dynamic", use_container_width=True, key="editor_crono")
+
+    col_btn1, col_btn2 = st.columns([1, 2])
+    with col_btn1:
+        if st.button("💾 Salvar Alterações no Cronograma"):
+            conn = get_connection()
+            edited_crono.to_sql("cronograma_dados", conn, if_exists="replace", index=False)
+            conn.close()
+            st.success("Alterações salvas com sucesso no banco de dados!")
+            st.rerun()
+
+    with col_btn2:
+        csv_c = edited_crono.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("🖨️ Baixar / Imprimir Relatório Filtrado", csv_c, f"Cronograma_{distrito_selecionado}.csv", "text/csv")
+
+# -------------------------------------------------------------
+# ABA 2: SUBPREFEITURAS EDITÁVEIS
+# -------------------------------------------------------------
+with aba_subpref:
+    st.subheader("Totais e Indicadores das Subprefeituras")
+    
+    conn = get_connection()
+    df_sub_db = pd.read_sql_query("SELECT * FROM subprefeituras_dados", conn)
+    conn.close()
+
+    with st.expander("🛠️ Gerenciar Colunas (Adicionar / Apagar)"):
+        s_add, s_del = st.columns(2)
+        with s_add:
+            st.markdown("**Adicionar Nova Coluna:**")
+            nova_col_sub = st.text_input("Nome da nova coluna:", key="sub_add_col")
+            if st.button("➕ Adicionar Coluna em Subprefeituras"):
+                if nova_col_sub and nova_col_sub not in df_sub_db.columns:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(f'ALTER TABLE subprefeituras_dados ADD COLUMN "{nova_col_sub}" TEXT')
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Coluna '{nova_col_sub}' adicionada com sucesso!")
+                    st.rerun()
+                elif nova_col_sub in df_sub_db.columns:
+                    st.warning("Esta coluna já existe.")
+        
+        with s_del:
+            st.markdown("**Apagar Coluna Existente:**")
+            col_del_sub = st.selectbox("Selecione a coluna para remover:", [c for c in df_sub_db.columns if c != 'id'], key="sub_del_col")
+            if st.button("🗑️ Apagar Coluna Selecionada", key="btn_del_sub"):
+                if col_del_sub:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(f'ALTER TABLE subprefeituras_dados DROP COLUMN "{col_del_sub}"')
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Coluna '{col_del_sub}' removida com sucesso!")
+                    st.rerun()
+
+    st.info("💡 Edite os números ou subprefeituras e clique em 'Salvar Subprefeituras'.")
+    edited_sub = st.data_editor(df_sub_db, num_rows="dynamic", use_container_width=True, key="editor_sub")
+    
+    col_s1, col_s2 = st.columns([1, 2])
+    with col_s1:
+        if st.button("💾 Salvar Alterações das Subprefeituras"):
+            conn = get_connection()
+            edited_sub.to_sql("subprefeituras_dados", conn, if_exists="replace", index=False)
+            conn.close()
+            st.success("Dados das Subprefeituras atualizados com sucesso!")
+            st.rerun()
+
+    with col_s2:
+        csv_s = edited_sub.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("🖨️ Baixar Relatório de Subprefeituras", csv_s, "Subprefeituras_Totais.csv", "text/csv")
+
+# -------------------------------------------------------------
+# ABA 3: CONSELHEIROS MUNICIPAIS
+# -------------------------------------------------------------
+with aba_conselheiros:
+    st.subheader("Cadastro de Conselheiros Municipais do Conselho do Idoso")
+    
+    col_cad, col_list = st.columns([1, 2])
+    
+    with col_cad:
+        st.markdown("### Novo Conselheiro / Editar")
+        with st.form("form_conselheiro", clear_on_submit=True):
+            nome = st.text_input("Nome Completo:")
+            cargo = st.text_input("Cargo / Função:", value="Conselheiro(a)")
+            telefone = st.text_input("Telefone / WhatsApp:")
+            email = st.text_input("E-mail de Contato:")
+            regiao = st.text_input("Região / Subprefeitura:")
+            obs = st.text_area("Observações:")
+            foto = st.file_uploader("Foto do Conselheiro (Opcional):", type=["jpg", "png", "jpeg"])
+            
+            submitted = st.form_submit_button("➕ Cadastrar Conselheiro")
+            if submitted and nome:
+                foto_bytes = foto.read() if foto else None
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO conselheiros (nome, cargo, telefone, email, regiao, observacoes, foto)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (nome, cargo, telefone, email, regiao, obs, foto_bytes))
+                conn.commit()
+                conn.close()
+                st.success(f"Conselheiro {nome} cadastrado com sucesso!")
+                st.rerun()
+                
+    with col_list:
+        st.markdown("### Lista de Conselheiros Cadastrados")
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, nome, cargo, telefone, email, regiao, observacoes, foto FROM conselheiros")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        for row in rows:
+            c_id, c_nome, c_cargo, c_tel, c_email, c_regiao, c_obs, c_foto = row
+            with st.expander(f"👤 {c_nome} - {c_cargo} ({c_regiao or 'SP'})"):
+                col_img, col_info = st.columns([1, 3])
+                with col_img:
+                    if c_foto:
+                        st.image(c_foto, width=120)
+                    else:
+                        st.markdown("🖼️ *Sem Foto*")
+                with col_info:
+                    st.write(f"**Telefone:** {c_tel or 'Não informado'}")
+                    st.write(f"**E-mail:** {c_email or 'Não informado'}")
+                    st.write(f"**Observações:** {c_obs or '-'}")
+                    
+                    if st.button("❌ Excluir Conselheiro", key=f"del_cons_{c_id}"):
+                        conn = get_connection()
+                        c = conn.cursor()
+                        c.execute("DELETE FROM conselheiros WHERE id = ?", (c_id,))
+                        conn.commit()
+                        conn.close()
+                        st.rerun()
+
+# -------------------------------------------------------------
+# ABA 4: ANOTAÇÕES IMPORTANTES
+# -------------------------------------------------------------
+with aba_anotacoes:
+    st.subheader("Bloco de Anotações e Lembretes Importantes")
+    
+    col_anot_form, col_anot_view = st.columns([1, 2])
+    
+    with col_anot_form:
+        st.markdown("### Nova Anotação")
+        with st.form("form_anotacao", clear_on_submit=True):
+            titulo = st.text_input("Título da Anotação:")
+            categoria = st.selectbox("Categoria:", ["Geral", "Reunião", "Vistoria ILPI", "Atendimento", "Outros"])
+            conteudo = st.text_area("Conteúdo da Anotação / Lembrete:", height=150)
+            
+            salvar_anot = st.form_submit_button("📌 Salvar Anotação")
+            if salvar_anot and titulo:
+                conn = get_connection()
+                c = conn.cursor()
+                c.execute("INSERT INTO anotacoes (titulo, categoria, conteudo) VALUES (?, ?, ?)", (titulo, categoria, conteudo))
+                conn.commit()
+                conn.close()
+                st.success("Anotação salva com sucesso!")
+                st.rerun()
+                
+    with col_anot_view:
+        st.markdown("### Anotações Salvas")
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, titulo, categoria, conteudo, data_criacao FROM anotacoes ORDER BY data_criacao DESC")
+        anotacoes = cursor.fetchall()
+        conn.close()
+        
+        for a_id, a_tit, a_cat, a_cont, a_data in anotacoes:
+            with st.expander(f"📝 [{a_cat}] {a_tit} - {a_data[:16]}"):
+                st.write(a_cont)
+                if st.button("🗑️ Excluir Anotação", key=f"del_anot_{a_id}"):
+                    conn = get_connection()
+                    c = conn.cursor()
+                    c.execute("DELETE FROM anotacoes WHERE id = ?", (a_id,))
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
+
+# -------------------------------------------------------------
+# ABA 5: REGISTROS / CASAS DE REPOUSO
+# -------------------------------------------------------------
+with aba_registros:
+    st.subheader("Base de Registros e Equipamentos (Editável)")
+    
+    conn = get_connection()
+    df_reg_db = pd.read_sql_query("SELECT * FROM registros_base", conn)
+    conn.close()
+
+    with st.expander("🛠️ Gerenciar Colunas (Adicionar / Apagar)"):
+        r_add, r_del = st.columns(2)
+        with r_add:
+            st.markdown("**Adicionar Nova Coluna:**")
+            nova_col_reg = st.text_input("Nome da nova coluna:", key="reg_add_col")
+            if st.button("➕ Adicionar Coluna nos Registros"):
+                if nova_col_reg and nova_col_reg not in df_reg_db.columns:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(f'ALTER TABLE registros_base ADD COLUMN "{nova_col_reg}" TEXT')
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Coluna '{nova_col_reg}' adicionada com sucesso!")
+                    st.rerun()
+                elif nova_col_reg in df_reg_db.columns:
+                    st.warning("Esta coluna já existe.")
+        
+        with r_del:
+            st.markdown("**Apagar Coluna Existente:**")
+            col_del_reg = st.selectbox("Selecione a coluna para remover:", [c for c in df_reg_db.columns if c != 'id'], key="reg_del_col")
+            if st.button("🗑️ Apagar Coluna Selecionada", key="btn_del_reg"):
+                if col_del_reg:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(f'ALTER TABLE registros_base DROP COLUMN "{col_del_reg}"')
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Coluna '{col_del_reg}' removida com sucesso!")
+                    st.rerun()
+
+    c1, c2 = st.columns(2)
+    with c1:
+        subpref_sel = st.selectbox("Subprefeitura:", ["Todas"] + sorted([str(x) for x in df_reg_db['subprefeitura'].dropna().unique() if str(x) != 'nan']))
+    with c2:
+        bairros_disp = df_reg_db['bairro'].dropna().unique() if subpref_sel == "Todas" else df_reg_db[df_reg_db['subprefeitura'] == subpref_sel]['bairro'].dropna().unique()
+        bairro_sel = st.selectbox("Bairro:", ["Todos"] + sorted([str(x) for x in bairros_disp if str(x) != 'nan']))
+        
+    df_reg_filt = df_reg_db.copy()
+    if subpref_sel != "Todas":
+        df_reg_filt = df_reg_filt[df_reg_filt['subprefeitura'] == subpref_sel]
+    if bairro_sel != "Todos":
+        df_reg_filt = df_reg_filt[df_reg_filt['bairro'] == bairro_sel]
+        
+    edited_reg = st.data_editor(df_reg_filt, num_rows="dynamic", use_container_width=True, key="editor_reg")
+    
+    col_r1, col_r2 = st.columns([1, 2])
+    with col_r1:
+        if st.button("💾 Salvar Alterações nos Registros"):
+            conn = get_connection()
+            edited_reg.to_sql("registros_base", conn, if_exists="replace", index=False)
+            conn.close()
+            st.success("Registros atualizados com sucesso!")
+            st.rerun()
+
+    with col_r2:
+        csv_b = edited_reg.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("🖨️ Baixar Registros Filtrados", csv_b, f"Registros_{subpref_sel}_{bairro_sel}.csv", "text/csv")
+
+# -------------------------------------------------------------
+# ABA 6: MAPA E LEGENDAS
+# -------------------------------------------------------------
+with aba_mapa:
+    st.subheader("🗺️ Fotos, Mapas e Legendas Oficiais")
+    
+    @st.dialog("🔍 Visualização Ampliada da Imagem", width="large")
+    def popup_imagem(caminho_ou_bytes, titulo_img="Imagem"):
+        st.markdown(f"### {titulo_img}")
+        zoom_px = st.slider("🔍 Ajuste o Tamanho / Zoom da Imagem (Pixels):", min_value=600, max_value=2200, value=1100, step=100, key="modal_zoom")
+        st.image(caminho_ou_bytes, width=zoom_px)
+        st.markdown("---")
+        if st.button("❌ Fechar Imagem", use_container_width=True):
+            st.rerun()
+
+    col_mapa_main, col_upload = st.columns([1, 1])
+    
+    with col_mapa_main:
+        st.markdown("### Mapa de São Paulo e Legenda Padrão")
+        nome_imagem = "mapa_legendas.png"
+        if os.path.exists(nome_imagem):
+            st.image(nome_imagem, width=280, caption="Clique no botão abaixo para expandir em tela cheia")
+            if st.button("🔎 Ampliar Mapa em Tela Cheia", key="btn_open_mapa"):
+                popup_imagem(nome_imagem, "Mapa de SP e Legendas")
+        else:
+            st.warning(f"O arquivo '{nome_imagem}' não foi localizado na pasta 'Leitor_Dados_Idosos'.")
+
+    with col_upload:
+        st.markdown("### 📥 Enviar Nova Foto / Imagem")
+        with st.form("form_upload_foto", clear_on_submit=True):
+            titulo_foto = st.text_input("Título ou Identificação da Foto:")
+            foto_up = st.file_uploader("Escolher arquivo de imagem do computador:", type=["jpg", "jpeg", "png", "bmp"])
+            env = st.form_submit_button("📤 Enviar e Fixar Foto")
+            
+            if env and foto_up:
+                foto_bytes = foto_up.read()
+                tit = titulo_foto if titulo_foto else foto_up.name
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO galeria_fotos (titulo, foto) VALUES (?, ?)", (tit, foto_bytes))
+                conn.commit()
+                conn.close()
+                st.success("Foto enviada e fixada com sucesso na galeria!")
+                st.rerun()
+
+    st.markdown("---")
+    st.subheader("🖼️ Galeria de Fotos e Documentos Fixados")
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, titulo, foto FROM galeria_fotos ORDER BY id DESC")
+    fotos_db = cursor.fetchall()
+    conn.close()
+
+    if fotos_db:
+        cols_gal = st.columns(4)
+        for idx, (f_id, f_tit, f_bytes) in enumerate(fotos_db):
+            with cols_gal[idx % 4]:
+                st.markdown(f"**{f_tit}**")
+                st.image(f_bytes, width=200)
+                
+                b1, b2 = st.columns(2)
+                with b1:
+                    if st.button("🔍 Ampliar", key=f"amp_img_{f_id}"):
+                        popup_imagem(f_bytes, f_tit)
+                with b2:
+                    if st.button("🗑️ Apagar", key=f"del_img_{f_id}"):
+                        conn = get_connection()
+                        c = conn.cursor()
+                        c.execute("DELETE FROM galeria_fotos WHERE id = ?", (f_id,))
+                        conn.commit()
+                        conn.close()
+                        st.rerun()
+    else:
+        st.info("Nenhuma foto extra foi adicionada ainda. Utilize a caixa 'Enviar Nova Foto' acima para incluir mapas, tabelas ou fotos.")
+
+# -------------------------------------------------------------
+# ABA 7: SOBRE (ÚLTIMA ABA)
+# -------------------------------------------------------------
+with aba_sobre:
+    st.subheader("ℹ️ Sobre esta Aplicação")
+    st.markdown("""
+    Este painel foi desenvolvido especialmente para apoio à consulta, gestão e acompanhamento de políticas públicas voltadas às pessoas idosas na cidade de São Paulo.
+    
+    * **👨‍💻 Criadores:** Rodrigo Prado Miguel & Francisco Miguel Filho
+    * **⚙️ Desenvolvimento e Organização:** Aplicação local rápida e intuitiva.
+    * **📊 Bases Utilizadas:** Tabela Geral de Registros 2024 e Cronograma de Indicadores por Distrito.
+    * **🏷️ Versão:** 1.0.0
+    """)
+
+
+
+# import streamlit as st
+# import pandas as pd
+# import sqlite3
+# import docx
+# import os
+# import re
+
+# # Configuração da página
+# st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="wide")
+
+# DB_FILE = "dados_idosos.db"
+
+# # --- BANCO DE DADOS SQLITE ---
+# def get_connection():
+#     return sqlite3.connect(DB_FILE)
+
+# def inicializar_banco():
+#     conn = get_connection()
+#     cursor = conn.cursor()
+    
+#     # 1. Tabela de Conselheiros
+#     cursor.execute("""
+#         CREATE TABLE IF NOT EXISTS conselheiros (
+#             id INTEGER PRIMARY KEY AUTOINCREMENT,
+#             nome TEXT, cargo TEXT, telefone TEXT, email TEXT,
+#             regiao TEXT, observacoes TEXT, foto BLOB
+#         )
+#     """)
+    
+#     cursor.execute("SELECT COUNT(*) FROM conselheiros")
+#     if cursor.fetchone()[0] == 0:
+#         cursor.execute("INSERT INTO conselheiros (nome, cargo, regiao) VALUES ('Francisco Miguel Filho', 'Conselheiro', 'São Paulo')")
+#         cursor.execute("INSERT INTO conselheiros (nome, cargo, regiao) VALUES ('Vanessa Nassif', 'Conselheira', 'São Paulo')")
+    
+#     # 2. Tabela de Anotações Importantes
+#     cursor.execute("""
+#         CREATE TABLE IF NOT EXISTS anotacoes (
+#             id INTEGER PRIMARY KEY AUTOINCREMENT,
+#             titulo TEXT, categoria TEXT, conteudo TEXT,
+#             data_criacao DATETIME DEFAULT CURRENT_TIMESTAMP
+#         )
+#     """)
+    
+#     # 3. Tabela do Cronograma Desmembrado
+#     cursor.execute("""
+#         CREATE TABLE IF NOT EXISTS cronograma_dados (
+#             id INTEGER PRIMARY KEY AUTOINCREMENT,
+#             distrito TEXT, ano_criacao TEXT, no_mapa TEXT, pop_total TEXT,
+#             pop_masc TEXT, pop_fem TEXT, subpref_sn TEXT, cras TEXT, creas TEXT,
+#             caei TEXT, nci TEXT, ilpi TEXT, bpc TEXT, rank_vun TEXT,
+#             ubs TEXT, ama TEXT, idrpg TEXT, emad TEXT, ursi TEXT, upa TEXT,
+#             cdi TEXT, pai TEXT, ceu TEXT, cdc TEXT, ccint TEXT,
+#             ilpi_2setor TEXT, cdia TEXT, nci_2setor TEXT, outros_projetos TEXT
+#         )
+#     """)
+
+#     cursor.execute("SELECT COUNT(*) FROM cronograma_dados")
+#     if cursor.fetchone()[0] == 0 and os.path.exists("cronograma.docx"):
+#         try:
+#             doc = docx.Document("cronograma.docx")
+#             if len(doc.tables) > 0:
+#                 table = doc.tables[0]
+#                 for row in table.rows[3:]:
+#                     txts = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
+#                     if not txts or len(txts) < 18: continue
+#                     distrito = txts[0]
+#                     if not distrito or distrito.upper().startswith("ZONA") or distrito.upper().startswith("DISTRITOS"): continue
+#                     def sep(val, q=2):
+#                         if not val or val == '-' or val == '0-': return ['0'] * q
+#                         p = [x.strip() for x in re.split(r'[-–—]', str(val)) if x.strip()]
+#                         while len(p) < q: p.append('0')
+#                         return p[:q]
+                    
+#                     cras, creas = sep(txts[7], 2)
+#                     ubs, ama = sep(txts[13], 2)
+#                     ursi, upa = sep(txts[16], 2)
+#                     cdi, pai = sep(txts[17], 2)
+#                     ceu, cdc, ccint = sep(txts[18], 3)
+#                     col18 = txts[19] if len(txts) > 19 else ""
+#                     ilpi_2, cdia, nci_2 = sep(col18, 3)
+#                     col19 = txts[20] if len(txts) > 20 else ""
+                    
+#                     cursor.execute("""
+#                         INSERT INTO cronograma_dados (
+#                             distrito, ano_criacao, no_mapa, pop_total, pop_masc, pop_fem,
+#                             subpref_sn, cras, creas, caei, nci, ilpi, bpc, rank_vun,
+#                             ubs, ama, idrpg, emad, ursi, upa, cdi, pai, ceu, cdc, ccint,
+#                             ilpi_2setor, cdia, nci_2setor, outros_projetos
+#                         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+#                     """, (
+#                         distrito, txts[1], txts[2], txts[3], txts[4], txts[5], txts[6],
+#                         cras, creas, txts[8].replace('-',''), txts[9].replace('-',''), txts[10].replace('-',''),
+#                         txts[11], txts[12], ubs, ama, txts[14], txts[15], ursi, upa, cdi, pai,
+#                         ceu, cdc, ccint, ilpi_2, cdia, nci_2, col19
+#                     ))
+#         except Exception:
+#             pass
+
+#     # 4. Tabela de Subprefeituras
+#     cursor.execute("""
+#         CREATE TABLE IF NOT EXISTS subprefeituras_dados (
+#             id INTEGER PRIMARY KEY AUTOINCREMENT,
+#             subprefeitura TEXT, regiao TEXT, ilpi_particular INT, ilpi_conveniada INT,
+#             ilpi_nao_conveniada INT, cdi_particular INT, cdi_conveniado INT,
+#             nci_conveniado INT, nci_nao_conveniado INT, caei INT, ccinter INT, total INT
+#         )
+#     """)
+#     cursor.execute("SELECT COUNT(*) FROM subprefeituras_dados")
+#     if cursor.fetchone()[0] == 0 and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
+#         try:
+#             df_t = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="TOTAIS").dropna(how="all")
+#             if 'Unnamed: 0' in df_t.columns: df_t = df_t.drop(columns=['Unnamed: 0'])
+#             for _, r in df_t.iterrows():
+#                 cursor.execute("""
+#                     INSERT INTO subprefeituras_dados (
+#                         regiao, subprefeitura, ilpi_particular, ilpi_conveniada, ilpi_nao_conveniada,
+#                         cdi_particular, cdi_conveniado, nci_conveniado, nci_nao_conveniado, caei, ccinter, total
+#                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+#                 """, (
+#                     str(r.get('REGIÃO', '')), str(r.get('SUBPREFEITURA', '')),
+#                     int(r.get('ILPI particular', 0) or 0), int(r.get('ILPI conveniada', 0) or 0),
+#                     int(r.get('ILPI não conveniada', 0) or 0), int(r.get('CDI particular', 0) or 0),
+#                     int(r.get('CDI conveniado', 0) or 0), int(r.get('NCI conveniado', 0) or 0),
+#                     int(r.get('NCI não conveniado', 0) or 0), int(r.get('CAEI', 0) or 0),
+#                     int(r.get('CCINTER', 0) or 0), int(r.get('TOTAL POR SUBPREF', 0) or 0)
+#                 ))
+#         except Exception:
+#             pass
+
+#     # 5. Tabela de Registros Base
+#     cursor.execute("""
+#         CREATE TABLE IF NOT EXISTS registros_base (
+#             id INTEGER PRIMARY KEY AUTOINCREMENT,
+#             no_registro TEXT, vigencia TEXT, data TEXT, modalidade TEXT,
+#             nome_institucional TEXT, nome_fantasia TEXT, cnpj_matriz TEXT, cnpj_filial TEXT,
+#             programa TEXT, res TEXT, convenio TEXT, endereco TEXT, cep TEXT, bairro TEXT,
+#             subprefeitura TEXT, regiao TEXT, telefone TEXT, email TEXT, site TEXT,
+#             capacidade TEXT, atendidos TEXT, sei TEXT, id_original TEXT
+#         )
+#     """)
+#     cursor.execute("SELECT COUNT(*) FROM registros_base")
+#     if cursor.fetchone()[0] == 0 and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
+#         try:
+#             df_b = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="Base de Dados", header=1).dropna(how="all")
+#             for _, r in df_b.iterrows():
+#                 cursor.execute("""
+#                     INSERT INTO registros_base (
+#                         no_registro, vigencia, data, modalidade, nome_institucional, nome_fantasia,
+#                         cnpj_matriz, cnpj_filial, programa, res, convenio, endereco, cep, bairro,
+#                         subprefeitura, regiao, telefone, email, site, capacidade, atendidos, sei, id_original
+#                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+#                 """, (
+#                     str(r.get('Nº REGISTRO', '')), str(r.get('VIGÊNCIA', '')), str(r.get('DATA', '')),
+#                     str(r.get('MODALIDADE', '')), str(r.get('NOME INSTITUCIONAL', '')), str(r.get('NOME FANTASIA', '')),
+#                     str(r.get('CNPJ Matriz', '')), str(r.get('CNPJ Filial', '')), str(r.get('PROGRAMA', '')),
+#                     str(r.get('RES', '')), str(r.get('CONVÊNIO', '')), str(r.get('ENDEREÇO DO PROGRAMA', '')),
+#                     str(r.get('CEP', '')), str(r.get('BAIRRO', '')), str(r.get('SUBPREFEITURA', '')),
+#                     str(r.get('REGIÃO', '')), str(r.get('TELEFONE', '')), str(r.get('E-MAIL', '')),
+#                     str(r.get('SITE', '')), str(r.get('CAPACIDADE', '')), str(r.get('ATENDIDOS', '')),
+#                     str(r.get('SEI', '')), str(r.get('ID', ''))
+#                 ))
+#         except Exception:
+#             pass
+
+#     # 6. Tabela de Galeria de Imagens/Fotos
+#     cursor.execute("""
+#         CREATE TABLE IF NOT EXISTS galeria_fotos (
+#             id INTEGER PRIMARY KEY AUTOINCREMENT,
+#             titulo TEXT, foto BLOB
+#         )
+#     """)
+
+#     conn.commit()
+#     conn.close()
+
+# inicializar_banco()
+
+# st.title("👵👴 Painel Geral de Gestão: Políticas e Atenção ao Idoso - SP")
+
+# # --- ORDEM DAS ABAS SOLICITADA ---
+# aba_crono, aba_subpref, aba_conselheiros, aba_anotacoes, aba_registros, aba_mapa, aba_sobre = st.tabs([
+#     "📋 Cronograma Editável (Distritos)",
+#     "🏛️ Subprefeituras (Editável)",
+#     "👥 Conselheiros Municipais",
+#     "📝 Anotações Importantes",
+#     "📌 Registros / Casas de Repouso",
+#     "🗺️ Fotos, Mapas e Legendas",
+#     "ℹ️ Sobre"
+# ])
+
+# # -------------------------------------------------------------
+# # ABA 1: CRONOGRAMA EDITÁVEL
+# # -------------------------------------------------------------
+# with aba_crono:
+#     st.subheader("Editador de Dados do Cronograma por Distrito")
+    
+#     conn = get_connection()
+#     df_crono_db = pd.read_sql_query("SELECT * FROM cronograma_dados", conn)
+#     conn.close()
+
+#     with st.expander("🛠️ Gerenciar Colunas (Adicionar / Apagar)"):
+#         c_add, c_del = st.columns(2)
+#         with c_add:
+#             st.markdown("**Adicionar Nova Coluna:**")
+#             nova_col = st.text_input("Nome da nova coluna:", key="crono_add_col")
+#             if st.button("➕ Adicionar Coluna no Cronograma"):
+#                 if nova_col and nova_col not in df_crono_db.columns:
+#                     conn = get_connection()
+#                     cursor = conn.cursor()
+#                     cursor.execute(f'ALTER TABLE cronograma_dados ADD COLUMN "{nova_col}" TEXT')
+#                     conn.commit()
+#                     conn.close()
+#                     st.success(f"Coluna '{nova_col}' adicionada com sucesso!")
+#                     st.rerun()
+#                 elif nova_col in df_crono_db.columns:
+#                     st.warning("Esta coluna já existe.")
+        
+#         with c_del:
+#             st.markdown("**Apagar Coluna Existente:**")
+#             col_para_apagar = st.selectbox("Selecione a coluna para remover:", [c for c in df_crono_db.columns if c != 'id'], key="crono_del_col")
+#             if st.button("🗑️ Apagar Coluna Selecionada", key="btn_del_crono"):
+#                 if col_para_apagar:
+#                     conn = get_connection()
+#                     cursor = conn.cursor()
+#                     cursor.execute(f'ALTER TABLE cronograma_dados DROP COLUMN "{col_para_apagar}"')
+#                     conn.commit()
+#                     conn.close()
+#                     st.success(f"Coluna '{col_para_apagar}' removida com sucesso!")
+#                     st.rerun()
+
+#     col_filtro, _ = st.columns([1, 2])
+#     with col_filtro:
+#         distritos_lista = ["Todos os Distritos"] + sorted(list(df_crono_db['distrito'].dropna().unique()))
+#         distrito_selecionado = st.selectbox("🔍 Selecione o Distrito para Filtrar / Editar:", distritos_lista)
+
+#     st.info("💡 Você pode editar qualquer célula diretamente na tabela abaixo e clicar em 'Salvar Alterações'.")
+
+#     df_exibicao = df_crono_db[df_crono_db['distrito'] == distrito_selecionado] if distrito_selecionado != "Todos os Distritos" else df_crono_db
+#     edited_crono = st.data_editor(df_exibicao, num_rows="dynamic", use_container_width=True, key="editor_crono")
+
+#     col_btn1, col_btn2 = st.columns([1, 2])
+#     with col_btn1:
+#         if st.button("💾 Salvar Alterações no Cronograma"):
+#             conn = get_connection()
+#             edited_crono.to_sql("cronograma_dados", conn, if_exists="replace", index=False)
+#             conn.close()
+#             st.success("Alterações salvas com sucesso no banco de dados!")
+#             st.rerun()
+
+#     with col_btn2:
+#         csv_c = edited_crono.to_csv(index=False).encode('utf-8-sig')
+#         st.download_button("🖨️ Baixar / Imprimir Relatório Filtrado", csv_c, f"Cronograma_{distrito_selecionado}.csv", "text/csv")
+
+# # -------------------------------------------------------------
+# # ABA 2: SUBPREFEITURAS EDITÁVEIS
+# # -------------------------------------------------------------
+# with aba_subpref:
+#     st.subheader("Totais e Indicadores das Subprefeituras")
+    
+#     conn = get_connection()
+#     df_sub_db = pd.read_sql_query("SELECT * FROM subprefeituras_dados", conn)
+#     conn.close()
+
+#     with st.expander("🛠️ Gerenciar Colunas (Adicionar / Apagar)"):
+#         s_add, s_del = st.columns(2)
+#         with s_add:
+#             st.markdown("**Adicionar Nova Coluna:**")
+#             nova_col_sub = st.text_input("Nome da nova coluna:", key="sub_add_col")
+#             if st.button("➕ Adicionar Coluna em Subprefeituras"):
+#                 if nova_col_sub and nova_col_sub not in df_sub_db.columns:
+#                     conn = get_connection()
+#                     cursor = conn.cursor()
+#                     cursor.execute(f'ALTER TABLE subprefeituras_dados ADD COLUMN "{nova_col_sub}" TEXT')
+#                     conn.commit()
+#                     conn.close()
+#                     st.success(f"Coluna '{nova_col_sub}' adicionada com sucesso!")
+#                     st.rerun()
+#                 elif nova_col_sub in df_sub_db.columns:
+#                     st.warning("Esta coluna já existe.")
+        
+#         with s_del:
+#             st.markdown("**Apagar Coluna Existente:**")
+#             col_del_sub = st.selectbox("Selecione a coluna para remover:", [c for c in df_sub_db.columns if c != 'id'], key="sub_del_col")
+#             if st.button("🗑️ Apagar Coluna Selecionada", key="btn_del_sub"):
+#                 if col_del_sub:
+#                     conn = get_connection()
+#                     cursor = conn.cursor()
+#                     cursor.execute(f'ALTER TABLE subprefeituras_dados DROP COLUMN "{col_del_sub}"')
+#                     conn.commit()
+#                     conn.close()
+#                     st.success(f"Coluna '{col_del_sub}' removida com sucesso!")
+#                     st.rerun()
+
+#     st.info("💡 Edite os números ou subprefeituras e clique em 'Salvar Subprefeituras'.")
+#     edited_sub = st.data_editor(df_sub_db, num_rows="dynamic", use_container_width=True, key="editor_sub")
+    
+#     col_s1, col_s2 = st.columns([1, 2])
+#     with col_s1:
+#         if st.button("💾 Salvar Alterações das Subprefeituras"):
+#             conn = get_connection()
+#             edited_sub.to_sql("subprefeituras_dados", conn, if_exists="replace", index=False)
+#             conn.close()
+#             st.success("Dados das Subprefeituras atualizados com sucesso!")
+#             st.rerun()
+
+#     with col_s2:
+#         csv_s = edited_sub.to_csv(index=False).encode('utf-8-sig')
+#         st.download_button("🖨️ Baixar Relatório de Subprefeituras", csv_s, "Subprefeituras_Totais.csv", "text/csv")
+
+# # -------------------------------------------------------------
+# # ABA 3: CONSELHEIROS MUNICIPAIS
+# # -------------------------------------------------------------
+# with aba_conselheiros:
+#     st.subheader("Cadastro de Conselheiros Municipais do Conselho do Idoso")
+    
+#     col_cad, col_list = st.columns([1, 2])
+    
+#     with col_cad:
+#         st.markdown("### Novo Conselheiro / Editar")
+#         with st.form("form_conselheiro", clear_on_submit=True):
+#             nome = st.text_input("Nome Completo:")
+#             cargo = st.text_input("Cargo / Função:", value="Conselheiro(a)")
+#             telefone = st.text_input("Telefone / WhatsApp:")
+#             email = st.text_input("E-mail de Contato:")
+#             regiao = st.text_input("Região / Subprefeitura:")
+#             obs = st.text_area("Observações:")
+#             foto = st.file_uploader("Foto do Conselheiro (Opcional):", type=["jpg", "png", "jpeg"])
+            
+#             submitted = st.form_submit_button("➕ Cadastrar Conselheiro")
+#             if submitted and nome:
+#                 foto_bytes = foto.read() if foto else None
+#                 conn = get_connection()
+#                 cursor = conn.cursor()
+#                 cursor.execute("""
+#                     INSERT INTO conselheiros (nome, cargo, telefone, email, regiao, observacoes, foto)
+#                     VALUES (?, ?, ?, ?, ?, ?, ?)
+#                 """, (nome, cargo, telefone, email, regiao, obs, foto_bytes))
+#                 conn.commit()
+#                 conn.close()
+#                 st.success(f"Conselheiro {nome} cadastrado com sucesso!")
+#                 st.rerun()
+                
+#     with col_list:
+#         st.markdown("### Lista de Conselheiros Cadastrados")
+#         conn = get_connection()
+#         cursor = conn.cursor()
+#         cursor.execute("SELECT id, nome, cargo, telefone, email, regiao, observacoes, foto FROM conselheiros")
+#         rows = cursor.fetchall()
+#         conn.close()
+        
+#         for row in rows:
+#             c_id, c_nome, c_cargo, c_tel, c_email, c_regiao, c_obs, c_foto = row
+#             with st.expander(f"👤 {c_nome} - {c_cargo} ({c_regiao or 'SP'})"):
+#                 col_img, col_info = st.columns([1, 3])
+#                 with col_img:
+#                     if c_foto:
+#                         st.image(c_foto, width=120)
+#                     else:
+#                         st.markdown("🖼️ *Sem Foto*")
+#                 with col_info:
+#                     st.write(f"**Telefone:** {c_tel or 'Não informado'}")
+#                     st.write(f"**E-mail:** {c_email or 'Não informado'}")
+#                     st.write(f"**Observações:** {c_obs or '-'}")
+                    
+#                     if st.button("❌ Excluir Conselheiro", key=f"del_cons_{c_id}"):
+#                         conn = get_connection()
+#                         c = conn.cursor()
+#                         c.execute("DELETE FROM conselheiros WHERE id = ?", (c_id,))
+#                         conn.commit()
+#                         conn.close()
+#                         st.rerun()
+
+# # -------------------------------------------------------------
+# # ABA 4: ANOTAÇÕES IMPORTANTES
+# # -------------------------------------------------------------
+# with aba_anotacoes:
+#     st.subheader("Bloco de Anotações e Lembretes Importantes")
+    
+#     col_anot_form, col_anot_view = st.columns([1, 2])
+    
+#     with col_anot_form:
+#         st.markdown("### Nova Anotação")
+#         with st.form("form_anotacao", clear_on_submit=True):
+#             titulo = st.text_input("Título da Anotação:")
+#             categoria = st.selectbox("Categoria:", ["Geral", "Reunião", "Vistoria ILPI", "Atendimento", "Outros"])
+#             conteudo = st.text_area("Conteúdo da Anotação / Lembrete:", height=150)
+            
+#             salvar_anot = st.form_submit_button("📌 Salvar Anotação")
+#             if salvar_anot and titulo:
+#                 conn = get_connection()
+#                 c = conn.cursor()
+#                 c.execute("INSERT INTO anotacoes (titulo, categoria, conteudo) VALUES (?, ?, ?)", (titulo, categoria, conteudo))
+#                 conn.commit()
+#                 conn.close()
+#                 st.success("Anotação salva com sucesso!")
+#                 st.rerun()
+                
+#     with col_anot_view:
+#         st.markdown("### Anotações Salvas")
+#         conn = get_connection()
+#         cursor = conn.cursor()
+#         cursor.execute("SELECT id, titulo, categoria, conteudo, data_criacao FROM anotacoes ORDER BY data_criacao DESC")
+#         anotacoes = cursor.fetchall()
+#         conn.close()
+        
+#         for a_id, a_tit, a_cat, a_cont, a_data in anotacoes:
+#             with st.expander(f"📝 [{a_cat}] {a_tit} - {a_data[:16]}"):
+#                 st.write(a_cont)
+#                 if st.button("🗑️ Excluir Anotação", key=f"del_anot_{a_id}"):
+#                     conn = get_connection()
+#                     c = conn.cursor()
+#                     c.execute("DELETE FROM anotacoes WHERE id = ?", (a_id,))
+#                     conn.commit()
+#                     conn.close()
+#                     st.rerun()
+
+# # -------------------------------------------------------------
+# # ABA 5: REGISTROS / CASAS DE REPOUSO
+# # -------------------------------------------------------------
+# with aba_registros:
+#     st.subheader("Base de Registros e Equipamentos (Editável)")
+    
+#     conn = get_connection()
+#     df_reg_db = pd.read_sql_query("SELECT * FROM registros_base", conn)
+#     conn.close()
+
+#     with st.expander("🛠️ Gerenciar Colunas (Adicionar / Apagar)"):
+#         r_add, r_del = st.columns(2)
+#         with r_add:
+#             st.markdown("**Adicionar Nova Coluna:**")
+#             nova_col_reg = st.text_input("Nome da nova coluna:", key="reg_add_col")
+#             if st.button("➕ Adicionar Coluna nos Registros"):
+#                 if nova_col_reg and nova_col_reg not in df_reg_db.columns:
+#                     conn = get_connection()
+#                     cursor = conn.cursor()
+#                     cursor.execute(f'ALTER TABLE registros_base ADD COLUMN "{nova_col_reg}" TEXT')
+#                     conn.commit()
+#                     conn.close()
+#                     st.success(f"Coluna '{nova_col_reg}' adicionada com sucesso!")
+#                     st.rerun()
+#                 elif nova_col_reg in df_reg_db.columns:
+#                     st.warning("Esta coluna já existe.")
+        
+#         with r_del:
+#             st.markdown("**Apagar Coluna Existente:**")
+#             col_del_reg = st.selectbox("Selecione a coluna para remover:", [c for c in df_reg_db.columns if c != 'id'], key="reg_del_col")
+#             if st.button("🗑️ Apagar Coluna Selecionada", key="btn_del_reg"):
+#                 if col_del_reg:
+#                     conn = get_connection()
+#                     cursor = conn.cursor()
+#                     cursor.execute(f'ALTER TABLE registros_base DROP COLUMN "{col_del_reg}"')
+#                     conn.commit()
+#                     conn.close()
+#                     st.success(f"Coluna '{col_del_reg}' removida com sucesso!")
+#                     st.rerun()
+
+#     c1, c2 = st.columns(2)
+#     with c1:
+#         subpref_sel = st.selectbox("Subprefeitura:", ["Todas"] + sorted([str(x) for x in df_reg_db['subprefeitura'].dropna().unique() if str(x) != 'nan']))
+#     with c2:
+#         bairros_disp = df_reg_db['bairro'].dropna().unique() if subpref_sel == "Todas" else df_reg_db[df_reg_db['subprefeitura'] == subpref_sel]['bairro'].dropna().unique()
+#         bairro_sel = st.selectbox("Bairro:", ["Todos"] + sorted([str(x) for x in bairros_disp if str(x) != 'nan']))
+        
+#     df_reg_filt = df_reg_db.copy()
+#     if subpref_sel != "Todas":
+#         df_reg_filt = df_reg_filt[df_reg_filt['subprefeitura'] == subpref_sel]
+#     if bairro_sel != "Todos":
+#         df_reg_filt = df_reg_filt[df_reg_filt['bairro'] == bairro_sel]
+        
+#     edited_reg = st.data_editor(df_reg_filt, num_rows="dynamic", use_container_width=True, key="editor_reg")
+    
+#     col_r1, col_r2 = st.columns([1, 2])
+#     with col_r1:
+#         if st.button("💾 Salvar Alterações nos Registros"):
+#             conn = get_connection()
+#             edited_reg.to_sql("registros_base", conn, if_exists="replace", index=False)
+#             conn.close()
+#             st.success("Registros atualizados com sucesso!")
+#             st.rerun()
+
+#     with col_r2:
+#         csv_b = edited_reg.to_csv(index=False).encode('utf-8-sig')
+#         st.download_button("🖨️ Baixar Registros Filtrados", csv_b, f"Registros_{subpref_sel}_{bairro_sel}.csv", "text/csv")
+
+# # -------------------------------------------------------------
+# # ABA 6: MAPA E LEGENDAS (MODAL EM TELA CHEIA E ZOOM RESPONSIVO)
+# # -------------------------------------------------------------
+# with aba_mapa:
+#     st.subheader("🗺️ Fotos, Mapas e Legendas Oficiais")
+    
+#     # JANELA MODAL POPUP EM TAMANHO GRANDE (width="large")
+#     @st.dialog("🔍 Visualização Ampliada da Imagem", width="large")
+#     def popup_imagem(caminho_ou_bytes, titulo_img="Imagem"):
+#         st.markdown(f"### {titulo_img}")
+        
+#         # Slider de Zoom com amplitude real para preencher telas grandes
+#         zoom_px = st.slider("🔍 Ajuste o Tamanho / Zoom da Imagem (Pixels):", min_value=600, max_value=2200, value=1100, step=100, key="modal_zoom")
+        
+#         # Exibição da imagem expandida
+#         st.image(caminho_ou_bytes, width=zoom_px)
+        
+#         st.markdown("---")
+#         if st.button("❌ Fechar Imagem", use_container_width=True):
+#             st.rerun()
+
+#     # Layout com Miniatura do Mapa e Caixa de Upload
+#     col_mapa_main, col_upload = st.columns([1, 1])
+    
+#     with col_mapa_main:
+#         st.markdown("### Mapa de São Paulo e Legenda Padrão")
+#         nome_imagem = "mapa_legendas.png"
+#         if os.path.exists(nome_imagem):
+#             st.image(nome_imagem, width=280, caption="Clique no botão abaixo para expandir em tela cheia")
+#             if st.button("🔎 Ampliar Mapa em Tela Cheia", key="btn_open_mapa"):
+#                 popup_imagem(nome_imagem, "Mapa de SP e Legendas")
+#         else:
+#             st.warning(f"O arquivo '{nome_imagem}' não foi localizado na pasta 'Leitor_Dados_Idosos'.")
+
+#     with col_upload:
+#         st.markdown("### 📥 Enviar Nova Foto / Imagem")
+#         with st.form("form_upload_foto", clear_on_submit=True):
+#             titulo_foto = st.text_input("Título ou Identificação da Foto:")
+#             foto_up = st.file_uploader("Escolher arquivo de imagem do computador:", type=["jpg", "jpeg", "png", "bmp"])
+#             env = st.form_submit_button("📤 Enviar e Fixar Foto")
+            
+#             if env and foto_up:
+#                 foto_bytes = foto_up.read()
+#                 tit = titulo_foto if titulo_foto else foto_up.name
+#                 conn = get_connection()
+#                 cursor = conn.cursor()
+#                 cursor.execute("INSERT INTO galeria_fotos (titulo, foto) VALUES (?, ?)", (tit, foto_bytes))
+#                 conn.commit()
+#                 conn.close()
+#                 st.success("Foto enviada e fixada com sucesso na galeria!")
+#                 st.rerun()
+
+#     st.markdown("---")
+#     st.subheader("🖼️ Galeria de Fotos e Documentos Fixados")
+    
+#     # Carregar fotos adicionais fixadas no SQLite
+#     conn = get_connection()
+#     cursor = conn.cursor()
+#     cursor.execute("SELECT id, titulo, foto FROM galeria_fotos ORDER BY id DESC")
+#     fotos_db = cursor.fetchall()
+#     conn.close()
+
+#     if fotos_db:
+#         cols_gal = st.columns(4)
+#         for idx, (f_id, f_tit, f_bytes) in enumerate(fotos_db):
+#             with cols_gal[idx % 4]:
+#                 st.markdown(f"**{f_tit}**")
+#                 st.image(f_bytes, width=200)
+                
+#                 b1, b2 = st.columns(2)
+#                 with b1:
+#                     if st.button("🔍 Ampliar", key=f"amp_img_{f_id}"):
+#                         popup_imagem(f_bytes, f_tit)
+#                 with b2:
+#                     if st.button("🗑️ Apagar", key=f"del_img_{f_id}"):
+#                         conn = get_connection()
+#                         c = conn.cursor()
+#                         c.execute("DELETE FROM galeria_fotos WHERE id = ?", (f_id,))
+#                         conn.commit()
+#                         conn.close()
+#                         st.rerun()
+#     else:
+#         st.info("Nenhuma foto extra foi adicionada ainda. Utilize a caixa 'Enviar Nova Foto' acima para incluir mapas, tabelas ou fotos.")
+
+
+# # -------------------------------------------------------------
+# # ABA 7: SOBRE (ÚLTIMA ABA)
+# # -------------------------------------------------------------
+# with aba_sobre:
+#     st.subheader("ℹ️ Sobre esta Aplicação")
+#     st.markdown("""
+#     Este painel foi desenvolvido especialmente para apoio à consulta, gestão e acompanhamento de políticas públicas voltadas às pessoas idosas na cidade de São Paulo.
+    
+#     * **Desenvolvimento e Organização:** Aplicação local rápida e intuitiva.
+#     * **Bases Utilizadas:** Tabela Geral de Registros 2024 e Cronograma de Indicadores por Distrito.
+#     * **Versão:** 1.0.0
+#     """)
+
