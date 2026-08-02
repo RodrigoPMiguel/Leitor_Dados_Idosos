@@ -5,7 +5,7 @@ import docx
 import os
 import re
 import io
-import base64
+import fitz  # PyMuPDF para converter PDF em imagem
 
 # Configuração da página
 st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="wide")
@@ -653,24 +653,30 @@ with aba_noticias:
     @st.dialog("🔍 Leitor e Visualizador de Documento", width="large")
     def popup_pdf(bytes_arquivo, nome_arq, titulo_doc):
         st.markdown(f"### {titulo_doc}")
+        
+        # LÓGICA DE CONVERSÃO DE PDF PARA IMAGENS
         if nome_arq.lower().endswith('.pdf'):
-            base64_pdf = base64.b64encode(bytes_arquivo).decode('utf-8')
-            # Alteração para a tag <embed> para evitar o bloqueio rígido do Chrome
-            pdf_display = f'''
-                <embed src="data:application/pdf;base64,{base64_pdf}" 
-                       width="100%" 
-                       height="650" 
-                       type="application/pdf">
-            '''
-            st.markdown(pdf_display, unsafe_allow_html=True)
+            st.info("Abaixo estão as páginas do documento, convertidas em imagem para facilitar a sua leitura, livre de bloqueios do navegador.")
+            try:
+                # Tenta abrir o PDF e converter as páginas
+                doc = fitz.open(stream=bytes_arquivo, filetype="pdf")
+                for i in range(len(doc)):
+                    page = doc.load_page(i)
+                    pix = page.get_pixmap(dpi=150) # Qualidade da imagem gerada (150 DPI)
+                    img_bytes = pix.tobytes("png")
+                    
+                    st.image(img_bytes, caption=f"Página {i + 1} de {len(doc)}", use_container_width=True)
+                    st.markdown("---")
+            except Exception as e:
+                st.error("Não foi possível processar a imagem deste documento PDF.")
+                
+            # Mantém o botão de download sempre disponível no final
+            st.download_button("📥 Baixar o PDF Original", bytes_arquivo, nome_arq, use_container_width=True)
             
-            st.info("⚠️ Se o seu navegador bloqueou a visualização do documento acima, utilize o botão abaixo para baixá-lo e abrir diretamente no seu computador.")
-            st.download_button("📥 Baixar PDF", bytes_arquivo, nome_arq, use_container_width=True)
         else:
-            st.info("A pré-visualização em tela cheia está disponível apenas para arquivos PDF. Utilize o botão abaixo para baixar o documento.")
-            st.download_button("📥 Baixar Documento", bytes_arquivo, nome_arq, use_container_width=True)
+            st.info("Visualização em tela cheia não suportada para arquivos do Word. Utilize o botão abaixo para baixá-lo em seu computador.")
+            st.download_button("📥 Baixar Documento (Word)", bytes_arquivo, nome_arq, use_container_width=True)
             
-        st.markdown("---")
         if st.button("❌ Fechar Visualizador", use_container_width=True):
             st.rerun()
 
