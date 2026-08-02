@@ -13,7 +13,7 @@ st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="
 DB_FILE = "dados_idosos.db"
 
 # --- SENHAS DE ACESSO AO MODO EDIÇÃO ---
-SENHAS_VALIDAS = ["idoso2026", "conselho2026", "gestao2026"]
+SENHAS_VALIDAS = ["kico21688", "res1aaa", "res2aaa"]
 
 # Controle de estado do login
 if "modo_edicao" not in st.session_state:
