@@ -3,4 +3,5 @@ pandas
 openpyxl
 python-docx
 pymupdf
-st-gsheets-connection
+gspread
+google-auth
