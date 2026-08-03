@@ -191,8 +191,7 @@ with st.sidebar:
 
 # --- CABEÇALHO ---
 if os.path.exists("logo.png"):
-    st.image("logo.png", use_container_width=True)
-
+    st.image("logo.png", width="stretch")
 st.subheader("Painel Geral de Gestão: Políticas e Atenção ao Idoso - SP")
 st.markdown("---")
 
@@ -269,7 +268,7 @@ with aba_crono:
             excel_crono = df_para_excel(edited_crono)
             st.download_button("🖨️ Baixar Relatório Filtrado (Excel)", excel_crono, f"Cronograma_{distrito_selecionado}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
-        st.dataframe(df_exibicao, use_container_width=True)
+        st.dataframe(df_exibicao, use_container_width="stretch")
         excel_crono = df_para_excel(df_exibicao)
         st.download_button("🖨️ Baixar Relatório Filtrado (Excel)", excel_crono, f"Cronograma_{distrito_selecionado}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -309,7 +308,7 @@ with aba_subpref:
 
     if not st.session_state["modo_edicao"]:
         st.info("ℹ️ Tabela em modo de leitura. Para editar valores, insira a senha na barra lateral.")
-        st.dataframe(df_sub_db, use_container_width=True)
+        st.dataframe(df_sub_db, use_container_width="stretch")
         excel_sub = df_para_excel(df_sub_db)
         st.download_button("🖨️ Baixar Relatório de Subprefeituras (Excel)", excel_sub, "Subprefeituras_Totais.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
@@ -493,7 +492,7 @@ with aba_registros:
         
     if not st.session_state["modo_edicao"]:
         st.info("ℹ️ Tabela em modo de leitura. Para editar valores, insira a senha na barra lateral.")
-        st.dataframe(df_reg_filt, use_container_width=True)
+        st.dataframe(df_reg_filt, use_container_width="stretch")
         excel_reg = df_para_excel(df_reg_filt)
         st.download_button("🖨️ Baixar Registros Filtrados (Excel)", excel_reg, f"Registros_{subpref_sel}_{bairro_sel}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
