@@ -113,14 +113,18 @@ def inicializar_planilha_se_vazia():
                 table = doc.tables[0]
                 for row in table.rows[3:]:
                     txts = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
-                    if not txts or len(txts) < 18: continue
+                    if not txts or len(txts) < 18:
+                        continue
                     distrito = txts[0]
-                    if not distrito or distrito.upper().startswith("ZONA") or distrito.upper().startswith("DISTRITOS"): continue
+                    if not distrito or distrito.upper().startswith("ZONA") or distrito.upper().startswith("DISTRITOS"):
+                        continue
                     
                     def sep(val, q=2):
-                        if not val or val == '-' or val == '0-': return ['0'] * q
+                        if not val or val == '-' or val == '0-':
+                            return ['0'] * q
                         p = [x.strip() for x in re.split(r'[-–—]', str(val)) if x.strip()]
-                        while len(p) < q: p.append('0')
+                        while len(p) < q:
+                            p.append('0')
                         return p[:q]
                     
                     cras, creas = sep(txts[7], 2)
@@ -150,7 +154,8 @@ def inicializar_planilha_se_vazia():
     if (df_sub.empty or (len(df_sub) == 1 and str(df_sub.iloc[0, 0]).strip() in ["1", "id"])) and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
         try:
             df_t = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="TOTAIS").dropna(how="all")
-            if 'Unnamed: 0' in df_t.columns: df_t = df_t.drop(columns=['Unnamed: 0'])
+            if 'Unnamed: 0' in df_t.columns:
+                df_t = df_t.drop(columns=['Unnamed: 0'])
             salvar_aba(df_t, "subprefeituras_dados")
         except Exception as e:
             st.error(f"Erro ao processar Subprefeituras Excel: {e}")
