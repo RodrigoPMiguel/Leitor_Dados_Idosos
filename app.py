@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from st_gsheets_connection import GSheetsConnection
+import gspread
+from google.oauth2.service_account import Credentials
 import docx
 import os
 import re
@@ -10,21 +11,54 @@ import fitz  # PyMuPDF para converter PDF em imagem
 # Configuração da página
 st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="wide")
 
-# Conexão automática com o Google Sheets via Secrets
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- CONEXÃO COM O GOOGLE SHEETS (USANDO GSPREAD) ---
+@st.cache_resource
+def conectar_gsheets():
+    try:
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        
+        # Lê os dados de autenticação direto do Secrets do Streamlit
+        creds_dict = st.secrets["connections"]["gsheets"]
+        credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(credentials)
+        
+        # Abre a planilha pela URL informada no Secrets
+        spreadsheet_url = creds_dict["spreadsheet"]
+        sh = client.open_by_url(spreadsheet_url)
+        return sh
+    except Exception as e:
+        st.error(f"Erro ao conectar ao Google Sheets: {e}")
+        return None
 
-# --- FUNÇÕES AUXILIARES PARA LER E SALVAR NO GOOGLE SHEETS ---
+# Instância da planilha aberta
+sh = conectar_gsheets()
+
+# --- FUNÇÕES AUXILIARES PARA LER E SALVAR ABA A ABA ---
 def ler_aba(nome_aba):
     try:
-        df = conn.read(worksheet=nome_aba, ttl=0)
+        if sh is None: 
+            return pd.DataFrame()
+        worksheet = sh.worksheet(nome_aba)
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
         return df.dropna(how="all")
     except Exception as e:
         return pd.DataFrame()
 
 def salvar_aba(df, nome_aba):
     try:
-        conn.update(worksheet=nome_aba, data=df)
-        st.cache_data.clear()
+        if sh is None: 
+            return False
+        worksheet = sh.worksheet(nome_aba)
+        worksheet.clear()
+        
+        # Prepara a lista com cabeçalhos e valores para o Google Sheets
+        df_clean = df.fillna("")
+        dados_lista = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
+        worksheet.update(dados_lista)
         return True
     except Exception as e:
         st.error(f"Erro ao salvar na aba {nome_aba}: {e}")
@@ -50,6 +84,7 @@ MESES_MAPA = {
     "Maio": 5, "Junho": 6, "Julho": 7, "Agosto": 8,
     "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
 }
+
 
 # --- BARRA LATERAL (MODO EDIÇÃO COM SENHA) ---
 with st.sidebar:
