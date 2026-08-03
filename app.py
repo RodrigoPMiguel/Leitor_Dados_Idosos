@@ -8,7 +8,8 @@ import re
 import io
 import time
 import base64
-import fitz  # PyMuPDF para converter a 1ª página do PDF em imagem
+import fitz  # PyMuPDF
+from PIL import Image
 
 # Configuração da página
 st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="wide")
@@ -40,13 +41,29 @@ def conectar_gsheets():
 
 sh = conectar_gsheets()
 
-# --- FUNÇÃO PARA CONVERTER ARQUIVOS EM BASE64 (SEM COTA DE DRIVE) ---
-def converter_para_base64(file_bytes, mime_type):
+# --- FUNÇÃO DE COMPRESSÃO E CONVERSÃO DE IMAGEM PARA BASE64 (RESPEITANDO LIMITE DO GOOGLE SHEETS) ---
+def comprimir_e_converter_base64(file_bytes, max_dim=800, qualidade=65):
     try:
-        encoded = base64.b64encode(file_bytes).decode('utf-8')
-        return f"data:{mime_type};base64,{encoded}"
+        # Abre a imagem usando PIL
+        img = Image.open(io.BytesIO(file_bytes))
+        
+        # Converte para RGB se estiver em RGBA/P
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+            
+        # Redimensiona proporcionalmente mantendo no máximo max_dim pixels
+        img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+        
+        # Salva comprimido em memória
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=qualidade, optimize=True)
+        compressed_bytes = buffer.getvalue()
+        
+        # Codifica para Base64
+        encoded = base64.b64encode(compressed_bytes).decode('utf-8')
+        return f"data:image/jpeg;base64,{encoded}"
     except Exception as e:
-        st.error(f"Erro ao processar arquivo: {e}")
+        st.error(f"Erro ao otimizar e comprimir imagem: {e}")
         return None
 
 # --- FUNÇÕES AUXILIARES COM CACHE DE LEITURA ---
@@ -288,7 +305,7 @@ with aba_conselheiros:
                 if btn_cadastrar_cons and nome_c:
                     foto_b64 = ""
                     if foto_c:
-                        foto_b64 = converter_para_base64(foto_c.read(), foto_c.type)
+                        foto_b64 = comprimir_e_converter_base64(foto_c.read())
                     
                     novo_id = len(df_cons) + 1
                     novo_cons = pd.DataFrame([{
@@ -376,7 +393,7 @@ with aba_mapa:
                 
                 if btn_env_f and tit_f and file_f:
                     bytes_f = file_f.read()
-                    b64_img = converter_para_base64(bytes_f, file_f.type)
+                    b64_img = comprimir_e_converter_base64(bytes_f)
                     
                     if b64_img:
                         nova_f = pd.DataFrame([{
@@ -442,13 +459,13 @@ with aba_noticias:
                         try:
                             doc = fitz.open(stream=bytes_n, filetype="pdf")
                             page = doc[0]
-                            pix = page.get_pixmap()
+                            pix = page.get_pixmap(dpi=100) # Renderiza a capa
                             capa_bytes = pix.tobytes("png")
-                            capa_b64 = converter_para_base64(capa_bytes, "image/png")
+                            capa_b64 = comprimir_e_converter_base64(capa_bytes)
                         except Exception as e:
                             st.error(f"Erro ao converter a 1ª página do PDF: {e}")
                     else:
-                        capa_b64 = converter_para_base64(bytes_n, file_n.type)
+                        capa_b64 = comprimir_e_converter_base64(bytes_n)
                         
                     if capa_b64:
                         nova_n = pd.DataFrame([{
@@ -493,8 +510,8 @@ with aba_sobre:
     st.markdown("### Sobre o Sistema")
     st.markdown("""
     **Painel Geral de Gestão - Políticas e Atenção ao Idoso (SP)**
-     - Desenvolvido por Rodrigo Prado Miguel e Francisco Miguel Filho
+    
     - **Banco de Dados:** Google Sheets
-    - **Armazenamento Mídia:** Base64 Integrado
+    - **Armazenamento de Mídia:** Base64 Otimizado
     - **Modo de Edição:** Protegido por Senha
     """)
