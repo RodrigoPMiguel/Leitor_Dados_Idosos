@@ -10,7 +10,6 @@ import re
 import io
 import time
 import fitz  # PyMuPDF para converter PDF em imagem
-from PIL import Image
 
 # Configuração da página
 st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="wide")
@@ -45,62 +44,46 @@ def conectar_google_services():
 
 sh, drive_service = conectar_google_services()
 
-# --- FUNÇÃO PARA SALVAR ARQUIVOS NO GOOGLE DRIVE ---
+# --- FUNÇÃO PARA UPLOAD DE ARQUIVOS NO GOOGLE DRIVE ---
 def upload_para_drive(file_bytes, filename, mime_type, folder_name="imagAppIdoso"):
     try:
         if drive_service is None:
             return None, None
             
-        # Busca a pasta imagAppIdoso
         query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         results = drive_service.files().list(q=query, fields="files(id, name)").execute()
         folders = results.get('files', [])
         
         if not folders:
-            # Se não achar a pasta, cria automaticamente
-            folder_metadata = {
-                'name': folder_name,
-                'mimeType': 'application/vnd.google-apps.folder'
-            }
+            folder_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
             folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
             folder_id = folder.get('id')
         else:
             folder_id = folders[0]['id']
             
-        # Metadados do arquivo
-        file_metadata = {
-            'name': filename,
-            'parents': [folder_id]
-        }
-        
+        file_metadata = {'name': filename, 'parents': [folder_id]}
         media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
         file_uploaded = drive_service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id, webViewLink, webContentLink'
+            body=file_metadata, media_body=media, fields='id, webViewLink'
         ).execute()
         
         file_id = file_uploaded.get('id')
-        
-        # Torna o arquivo legível publicamente para exibir no Streamlit
         permission = {'type': 'anyone', 'role': 'reader'}
         drive_service.permissions().create(fileId=file_id, body=permission).execute()
         
         link_view = f"https://lh3.googleusercontent.com/d/{file_id}"
-        link_download = file_uploaded.get('webViewLink')
+        link_drive = file_uploaded.get('webViewLink')
         
-        return link_view, link_download
+        return link_view, link_drive
     except Exception as e:
-        st.error(f"Erro no envio para o Google Drive: {e}")
+        st.error(f"Erro ao salvar arquivo no Drive: {e}")
         return None, None
 
-# --- FUNÇÕES AUXILIARES COM CACHE DE LEITURA ---
-@st.cache_data(ttl=300)
+# --- FUNÇÕES AUXILIARES DE BANCO DE DADOS ---
+@st.cache_data(ttl=60)
 def ler_aba(nome_aba):
     try:
-        if sh is None:
-            return pd.DataFrame()
-        
+        if sh is None: return pd.DataFrame()
         try:
             worksheet = sh.worksheet(nome_aba)
         except gspread.exceptions.WorksheetNotFound:
@@ -122,9 +105,7 @@ def ler_aba(nome_aba):
 
 def salvar_aba(df, nome_aba):
     try:
-        if sh is None:
-            return False
-            
+        if sh is None: return False
         try:
             worksheet = sh.worksheet(nome_aba)
         except gspread.exceptions.WorksheetNotFound:
@@ -142,88 +123,16 @@ def salvar_aba(df, nome_aba):
         df_clean = df_clean.fillna("")
         dados_lista = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
         worksheet.update(dados_lista)
-        
         st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Erro ao salvar na aba {nome_aba}: {e}")
         return False
 
-# --- CARGA INICIAL DE DADOS ---
-def inicializar_planilha_se_vazia():
-    df_cons = ler_aba("conselheiros")
-    if df_cons.empty or (len(df_cons) == 1 and str(df_cons.iloc[0, 0]).strip() in ["1", "id"]):
-        dados_cons = pd.DataFrame([
-            {"id": "1", "nome": "Francisco Miguel Filho", "cargo": "Conselheiro", "telefone": "", "email": "", "regiao": "São Paulo", "observacoes": ""},
-            {"id": "2", "nome": "Vanessa Nassif", "cargo": "Conselheira", "telefone": "", "email": "", "regiao": "São Paulo", "observacoes": ""}
-        ])
-        salvar_aba(dados_cons, "conselheiros")
-        time.sleep(1)
+# --- LISTAS AUXILIARES ---
+MESES = ["Todos", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+ANOS = ["Todos", "2026", "2025", "2024", "2023"]
 
-    df_crono = ler_aba("cronograma_dados")
-    if (df_crono.empty or (len(df_crono) == 1 and str(df_crono.iloc[0, 0]).strip() in ["1", "id"])) and os.path.exists("cronograma.docx"):
-        try:
-            doc = docx.Document("cronograma.docx")
-            if len(doc.tables) > 0:
-                rows_list = []
-                table = doc.tables[0]
-                for row in table.rows[3:]:
-                    txts = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
-                    if not txts or len(txts) < 18: continue
-                    distrito = txts[0]
-                    if not distrito or distrito.upper().startswith("ZONA") or distrito.upper().startswith("DISTRITOS"): continue
-                    
-                    def sep(val, q=2):
-                        if not val or val == '-' or val == '0-': return ['0'] * q
-                        p = [x.strip() for x in re.split(r'[-–—]', str(val)) if x.strip()]
-                        while len(p) < q: p.append('0')
-                        return p[:q]
-                    
-                    cras, creas = sep(txts[7], 2)
-                    ubs, ama = sep(txts[13], 2)
-                    ursi, upa = sep(txts[16], 2)
-                    cdi, pai = sep(txts[17], 2)
-                    ceu, cdc, ccint = sep(txts[18], 3)
-                    col18 = txts[19] if len(txts) > 19 else ""
-                    ilpi_2, cdia, nci_2 = sep(col18, 3)
-                    col19 = txts[20] if len(txts) > 20 else ""
-
-                    rows_list.append({
-                        "distrito": distrito, "ano_criacao": txts[1], "no_mapa": txts[2], "pop_total": txts[3],
-                        "pop_masc": txts[4], "pop_fem": txts[5], "subpref_sn": txts[6], "cras": cras, "creas": creas,
-                        "caei": txts[8].replace('-',''), "nci": txts[9].replace('-',''), "ilpi": txts[10].replace('-',''),
-                        "bpc": txts[11], "rank_vun": txts[12], "ubs": ubs, "ama": ama, "idrpg": txts[14], "emad": txts[15],
-                        "ursi": ursi, "upa": upa, "cdi": cdi, "pai": pai, "ceu": ceu, "cdc": cdc, "ccint": ccint,
-                        "ilpi_2setor": ilpi_2, "cdia": cdia, "nci_2setor": nci_2, "outros_projetos": col19
-                    })
-                if rows_list:
-                    salvar_aba(pd.DataFrame(rows_list), "cronograma_dados")
-                    time.sleep(1)
-        except Exception:
-            pass
-
-    df_sub = ler_aba("subprefeituras_dados")
-    if (df_sub.empty or (len(df_sub) == 1 and str(df_sub.iloc[0, 0]).strip() in ["1", "id"])) and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
-        try:
-            df_t = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="TOTAIS").dropna(how="all")
-            if 'Unnamed: 0' in df_t.columns: df_t = df_t.drop(columns=['Unnamed: 0'])
-            salvar_aba(df_t, "subprefeituras_dados")
-            time.sleep(1)
-        except Exception:
-            pass
-
-    df_reg = ler_aba("registros_base")
-    if (df_reg.empty or (len(df_reg) == 1 and str(df_reg.iloc[0, 0]).strip() in ["1", "id"])) and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
-        try:
-            df_b = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="Base de Dados", header=1).dropna(how="all")
-            salvar_aba(df_b, "registros_base")
-            time.sleep(1)
-        except Exception:
-            pass
-
-inicializar_planilha_se_vazia()
-
-# --- SENHAS DE ACESSO ---
 SENHAS_VALIDAS = ["kico21688", "res1aaa", "res2aaa"]
 
 if "modo_edicao" not in st.session_state:
@@ -261,7 +170,7 @@ if os.path.exists("logo.png"):
 st.subheader("Painel Geral de Gestão: Políticas e Atenção ao Idoso - SP")
 st.markdown("---")
 
-# --- ABAS DA APLICAÇÃO ---
+# --- ABAS ---
 aba_crono, aba_subpref, aba_conselheiros, aba_anotacoes, aba_registros, aba_mapa, aba_noticias, aba_sobre = st.tabs([
     "📋 Cronograma (Distritos)",
     "🏛️ Subprefeituras",
@@ -273,7 +182,7 @@ aba_crono, aba_subpref, aba_conselheiros, aba_anotacoes, aba_registros, aba_mapa
     "ℹ️ Sobre"
 ])
 
-# --- ABA 1: CRONOGRAMA POR DISTRITO ---
+# --- ABA 1: CRONOGRAMA ---
 with aba_crono:
     st.markdown("### Cronograma por Distrito")
     df_crono = ler_aba("cronograma_dados")
@@ -285,16 +194,16 @@ with aba_crono:
         if st.session_state["modo_edicao"]:
             df_editado = st.data_editor(df_exibir, num_rows="dynamic", key="editor_crono", width="stretch")
             if st.button("💾 Salvar Alterações (Cronograma)"):
-                df_crono = df_editado if distrito_sel == "Todos os Distritos" else df_crono.update(df_editado)
+                if distrito_sel == "Todos os Distritos":
+                    df_crono = df_editado
+                else:
+                    df_crono.update(df_editado)
                 if salvar_aba(df_crono, "cronograma_dados"):
                     st.success("Dados salvos com sucesso!")
                     st.rerun()
         else:
-            st.info("ℹ️ Tabela em modo de leitura.")
             st.dataframe(df_exibir, width="stretch")
         st.download_button("📥 Baixar Tabela em Excel", data=df_para_excel(df_exibir), file_name="Cronograma_Distritos.xlsx")
-    else:
-        st.warning("Nenhum dado encontrado.")
 
 # --- ABA 2: SUBPREFEITURAS ---
 with aba_subpref:
@@ -311,28 +220,77 @@ with aba_subpref:
             st.dataframe(df_sub, width="stretch")
         st.download_button("📥 Baixar Subprefeituras em Excel", data=df_para_excel(df_sub), file_name="Subprefeituras.xlsx")
 
-# --- ABA 3: CONSELHEIROS MUNICIPAIS ---
+# --- ABA 3: CONSELHEIROS MUNICIPAIS (COM FORMULÁRIO DE CADASTRO + FOTO) ---
 with aba_conselheiros:
-    st.markdown("### Conselheiros Municipais")
+    st.markdown("### 👥 Conselheiros Municipais")
     df_cons = ler_aba("conselheiros")
-    if not df_cons.empty:
-        if st.session_state["modo_edicao"]:
-            df_edit_c = st.data_editor(df_cons, num_rows="dynamic", key="editor_cons", width="stretch")
-            if st.button("💾 Salvar Alterações (Conselheiros)"):
-                if salvar_aba(df_edit_c, "conselheiros"):
-                    st.success("Conselheiros atualizados!")
-                    st.rerun()
-        else:
-            st.dataframe(df_cons, width="stretch")
-        st.download_button("📥 Baixar Conselheiros em Excel", data=df_para_excel(df_cons), file_name="Conselheiros.xlsx")
+    
+    if st.session_state["modo_edicao"]:
+        with st.expander("➕ Cadastrar Novo Conselheiro", expanded=False):
+            with st.form("form_novo_conselheiro", clear_on_submit=True):
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    nome_c = st.text_input("Nome Completo:*")
+                    cargo_c = st.text_input("Cargo / Função:")
+                    telefone_c = st.text_input("Telefone:")
+                with col_c2:
+                    email_c = st.text_input("E-mail:")
+                    regiao_c = st.text_input("Região / Subprefeitura:")
+                    foto_c = st.file_uploader("Foto do Conselheiro (JPG/PNG):", type=["jpg", "png", "jpeg"])
+                obs_c = st.text_area("Observações:")
+                
+                btn_cadastrar_cons = st.form_submit_button("💾 Cadastrar Conselheiro")
+                
+                if btn_cadastrar_cons and nome_c:
+                    foto_link = ""
+                    if foto_c:
+                        link_view, _ = upload_para_drive(foto_c.read(), foto_c.name, foto_c.type)
+                        foto_link = link_view if link_view else ""
+                    
+                    novo_id = len(df_cons) + 1
+                    novo_cons = pd.DataFrame([{
+                        "id": str(novo_id),
+                        "nome": nome_c,
+                        "cargo": cargo_c,
+                        "telefone": telefone_c,
+                        "email": email_c,
+                        "regiao": regiao_c,
+                        "foto": foto_link,
+                        "observacoes": obs_c
+                    }])
+                    df_cons = pd.concat([df_cons, novo_cons], ignore_index=True)
+                    if salvar_aba(df_cons, "conselheiros"):
+                        st.success("Conselheiro cadastrado com sucesso!")
+                        st.rerun()
+
+        st.markdown("---")
+        df_edit_c = st.data_editor(df_cons, num_rows="dynamic", key="editor_cons", width="stretch")
+        if st.button("💾 Salvar Alterações Tabela (Conselheiros)"):
+            if salvar_aba(df_edit_c, "conselheiros"):
+                st.success("Conselheiros atualizados!")
+                st.rerun()
+    else:
+        if not df_cons.empty:
+            for _, c_row in df_cons.iterrows():
+                with st.container():
+                    col_img, col_info = st.columns([1, 4])
+                    with col_img:
+                        if str(c_row.get("foto", "")).strip():
+                            st.image(str(c_row["foto"]), width=120)
+                        else:
+                            st.markdown("👤 *Sem foto*")
+                    with col_info:
+                        st.markdown(f"**{c_row.get('nome', '')}** — *{c_row.get('cargo', '')}*")
+                        st.write(f"📞 Telefone: {c_row.get('telefone', '')} | ✉️ E-mail: {c_row.get('email', '')}")
+                        st.write(f"📍 Região: {c_row.get('regiao', '')}")
+                        if str(c_row.get("observacoes", "")).strip():
+                            st.caption(f"Obs: {c_row.get('observacoes', '')}")
+                    st.markdown("---")
 
 # --- ABA 4: ANOTAÇÕES IMPORTANTES ---
 with aba_anotacoes:
     st.markdown("### Anotações Importantes")
     df_anot = ler_aba("anotacoes")
-    if df_anot.empty:
-        df_anot = pd.DataFrame([{"id": "1", "titulo": "Anotação Inicial", "conteudo": "Digite aqui observações relevantes sobre a gestão.", "data": "2026-08-03"}])
-    
     if st.session_state["modo_edicao"]:
         df_edit_a = st.data_editor(df_anot, num_rows="dynamic", key="editor_anot", width="stretch")
         if st.button("💾 Salvar Anotações"):
@@ -346,111 +304,155 @@ with aba_anotacoes:
 with aba_registros:
     st.markdown("### Registros Gerais e Casas de Repouso")
     df_reg = ler_aba("registros_base")
-    if not df_reg.empty:
-        if st.session_state["modo_edicao"]:
-            df_edit_r = st.data_editor(df_reg, num_rows="dynamic", key="editor_reg", width="stretch")
-            if st.button("💾 Salvar Registros"):
-                if salvar_aba(df_edit_r, "registros_base"):
-                    st.success("Base de registros salva!")
-                    st.rerun()
-        else:
-            st.dataframe(df_reg, width="stretch")
-        st.download_button("📥 Baixar Registros em Excel", data=df_para_excel(df_reg), file_name="Registros_Base.xlsx")
+    if st.session_state["modo_edicao"]:
+        df_edit_r = st.data_editor(df_reg, num_rows="dynamic", key="editor_reg", width="stretch")
+        if st.button("💾 Salvar Registros"):
+            if salvar_aba(df_edit_r, "registros_base"):
+                st.success("Base de registros salva!")
+                st.rerun()
+    else:
+        st.dataframe(df_reg, width="stretch")
 
-# --- ABA 6: FOTOS, MAPAS E LEGENDAS ---
+# --- ABA 6: FOTOS, MAPAS E LEGENDAS (COM FILTRO MÊS/ANO E ORDENAÇÃO) ---
 with aba_mapa:
     st.markdown("### 🗺️ Galeria de Fotos, Mapas e Legendas")
     df_fotos = ler_aba("fotos_mapas")
     
     if st.session_state["modo_edicao"]:
-        st.markdown("#### 📤 Upload de Nova Foto ou Mapa")
-        titulo_foto = st.text_input("Título / Descrição da Imagem:")
-        arquivo_foto = st.file_uploader("Selecione uma Imagem (JPG, PNG)", type=["jpg", "jpeg", "png"], key="up_foto")
+        with st.expander("➕ Enviar Nova Foto ou Mapa", expanded=True):
+            with st.form("form_upload_foto", clear_on_submit=True):
+                tit_f = st.text_input("Título / Descrição da Imagem:*")
+                col_f1, col_f2 = st.columns(2)
+                with col_f1:
+                    mes_f = st.selectbox("Mês de Referência:", MESES[1:])
+                with col_f2:
+                    ano_f = st.selectbox("Ano de Referência:", ANOS[1:])
+                file_f = st.file_uploader("Selecione a Imagem (JPG, PNG):", type=["jpg", "png", "jpeg"])
+                
+                btn_env_f = st.form_submit_button("🚀 Enviar para o Google Drive")
+                
+                if btn_env_f and tit_f and file_f:
+                    bytes_f = file_f.read()
+                    link_v, link_d = upload_para_drive(bytes_f, file_f.name, file_f.type)
+                    if link_d:
+                        nova_f = pd.DataFrame([{
+                            "titulo": tit_f,
+                            "mes": mes_f,
+                            "ano": ano_f,
+                            "link_imagem": link_v,
+                            "link_drive": link_d,
+                            "created_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }])
+                        df_fotos = pd.concat([df_fotos, nova_f], ignore_index=True)
+                        if salvar_aba(df_fotos, "fotos_mapas"):
+                            st.success("Foto/Mapa cadastrado com sucesso!")
+                            st.rerun()
+
+    # Filtros e exibição
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        filtro_mes = st.selectbox("Filtrar por Mês:", MESES, key="f_mes_foto")
+    with col_m2:
+        filtro_ano = st.selectbox("Filtrar por Ano:", ANOS, key="f_ano_foto")
         
-        if st.button("🚀 Enviar Foto para o Google Drive") and arquivo_foto and titulo_foto:
-            bytes_foto = arquivo_foto.read()
-            link_img, link_drive = upload_para_drive(bytes_foto, arquivo_foto.name, arquivo_foto.type)
+    df_exibir_f = df_fotos.copy()
+    if not df_exibir_f.empty:
+        if filtro_mes != "Todos" and "mes" in df_exibir_f.columns:
+            df_exibir_f = df_exibir_f[df_exibir_f["mes"] == filtro_mes]
+        if filtro_ano != "Todos" and "ano" in df_exibir_f.columns:
+            df_exibir_f = df_exibir_f[df_exibir_f["ano"] == filtro_ano]
             
-            if link_img:
-                novo_rec = pd.DataFrame([{
-                    "titulo": titulo_foto,
-                    "link_imagem": link_img,
-                    "link_drive": link_drive,
-                    "data": pd.Timestamp.now().strftime("%d/%m/%Y")
-                }])
-                df_fotos = pd.concat([df_fotos, novo_rec], ignore_index=True)
-                salvar_aba(df_fotos, "fotos_mapas")
-                st.success("Foto enviada e vinculada com sucesso!")
-                st.rerun()
+        # Ordenar da mais nova para a mais antiga
+        if "created_at" in df_exibir_f.columns:
+            df_exibir_f = df_exibir_f.sort_values(by="created_at", ascending=False)
+            
+        cols_grid = st.columns(3)
+        for i, (_, row_f) in enumerate(df_exibir_f.iterrows()):
+            with cols_grid[i % 3]:
+                if str(row_f.get("link_imagem", "")).strip():
+                    st.image(str(row_f["link_imagem"]), width="stretch")
+                st.markdown(f"**{row_f.get('titulo', '')}**")
+                st.caption(f"📅 {row_f.get('mes', '')}/{row_f.get('ano', '')}")
+                if str(row_f.get("link_drive", "")).strip():
+                    st.markdown(f"[🔗 Abrir no Google Drive]({row_f['link_drive']})")
+                st.markdown("---")
 
-    if not df_fotos.empty:
-        cols = st.columns(3)
-        for idx, row in df_fotos.iterrows():
-            with cols[idx % 3]:
-                if str(row.get("link_imagem", "")).strip():
-                    st.image(str(row["link_imagem"]), caption=str(row.get("titulo", "Sem título")), width="stretch")
-                st.markdown(f"**{row.get('titulo', '')}**")
-                if str(row.get("link_drive", "")).strip():
-                    st.markdown(f"[🔗 Ver no Google Drive]({row['link_drive']})")
-    else:
-        st.info("Nenhuma foto ou mapa cadastrado na galeria.")
-
-# --- ABA 7: NOTÍCIAS E PUBLICAÇÕES (COM PROCESSAMENTO DE PDF) ---
+# --- ABA 7: NOTÍCIAS E PUBLICAÇÕES (COM PROCESSAMENTO DE PDF E ORDENAÇÃO) ---
 with aba_noticias:
-    st.markdown("### 📰 Notícias e Boletins (PDF / Imagem)")
-    df_noticias = ler_aba("noticias_pdf")
+    st.markdown("### 📰 Notícias e Publicações (PDF / Imagem)")
+    df_not = ler_aba("noticias_pdf")
     
     if st.session_state["modo_edicao"]:
-        st.markdown("#### 📤 Enviar Nova Notícia ou Boletim em PDF")
-        titulo_noticia = st.text_input("Título da Notícia / Boletim:")
-        arquivo_pdf = st.file_uploader("Selecione o arquivo PDF ou Imagem", type=["pdf", "png", "jpg", "jpeg"], key="up_noticia")
-        
-        if st.button("🚀 Processar e Enviar Notícia") and arquivo_pdf and titulo_noticia:
-            bytes_file = arquivo_pdf.read()
-            
-            # Se for PDF, extrai a 1ª página como imagem de capa (fitz)
-            if arquivo_pdf.name.lower().endswith('.pdf'):
-                try:
-                    doc = fitz.open(stream=bytes_file, filetype="pdf")
-                    page = doc[0]
-                    pix = page.get_pixmap()
-                    img_bytes = pix.tobytes("png")
-                    
-                    # Upload da imagem da capa
-                    capa_link, _ = upload_para_drive(img_bytes, f"capa_{arquivo_pdf.name}.png", "image/png")
-                    # Upload do PDF completo
-                    pdf_link, link_drive = upload_para_drive(bytes_file, arquivo_pdf.name, "application/pdf")
-                except Exception as e:
-                    st.error(f"Erro ao extrair capa do PDF: {e}")
+        with st.expander("➕ Enviar Nova Notícia ou Boletim (PDF)", expanded=True):
+            with st.form("form_noticia_pdf", clear_on_submit=True):
+                tit_n = st.text_input("Título da Notícia / Boletim:*")
+                col_n1, col_n2 = st.columns(2)
+                with col_n1:
+                    mes_n = st.selectbox("Mês de Referência:", MESES[1:])
+                with col_n2:
+                    ano_n = st.selectbox("Ano de Referência:", ANOS[1:])
+                file_n = st.file_uploader("Selecione o arquivo (PDF, JPG, PNG):", type=["pdf", "jpg", "png", "jpeg"])
+                
+                btn_env_n = st.form_submit_button("🚀 Processar e Enviar Notícia")
+                
+                if btn_env_n and tit_n and file_n:
+                    bytes_n = file_n.read()
                     capa_link, link_drive = None, None
-            else:
-                capa_link, link_drive = upload_para_drive(bytes_file, arquivo_pdf.name, arquivo_pdf.type)
-            
-            if link_drive:
-                nova_noticia = pd.DataFrame([{
-                    "titulo": titulo_noticia,
-                    "link_capa": capa_link if capa_link else "",
-                    "link_drive": link_drive,
-                    "data": pd.Timestamp.now().strftime("%d/%m/%Y")
-                }])
-                df_noticias = pd.concat([df_noticias, nova_noticia], ignore_index=True)
-                salvar_aba(df_noticias, "noticias_pdf")
-                st.success("Notícia/Boletim cadastrado com sucesso!")
-                st.rerun()
+                    
+                    if file_n.name.lower().endswith('.pdf'):
+                        try:
+                            doc = fitz.open(stream=bytes_n, filetype="pdf")
+                            page = doc[0]
+                            pix = page.get_pixmap()
+                            capa_bytes = pix.tobytes("png")
+                            capa_link, _ = upload_para_drive(capa_bytes, f"capa_{file_n.name}.png", "image/png")
+                            _, link_drive = upload_para_drive(bytes_n, file_n.name, "application/pdf")
+                        except Exception as e:
+                            st.error(f"Erro ao converter PDF: {e}")
+                    else:
+                        capa_link, link_drive = upload_para_drive(bytes_n, file_n.name, file_n.type)
+                        
+                    if link_drive:
+                        nova_n = pd.DataFrame([{
+                            "titulo": tit_n,
+                            "mes": mes_n,
+                            "ano": ano_n,
+                            "link_capa": capa_link if capa_link else "",
+                            "link_drive": link_drive,
+                            "created_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }])
+                        df_not = pd.concat([df_not, nova_n], ignore_index=True)
+                        if salvar_aba(df_not, "noticias_pdf"):
+                            st.success("Notícia cadastrada com sucesso!")
+                            st.rerun()
 
-    if not df_noticias.empty:
-        cols_n = st.columns(2)
-        for idx_n, row_n in df_noticias.iterrows():
-            with cols_n[idx_n % 2]:
-                st.subheader(str(row_n.get("titulo", "Sem Título")))
+    # Filtros e exibição ordenada
+    col_fn1, col_fn2 = st.columns(2)
+    with col_fn1:
+        filtro_mes_n = st.selectbox("Filtrar por Mês:", MESES, key="f_mes_noticia")
+    with col_fn2:
+        filtro_ano_n = st.selectbox("Filtrar por Ano:", ANOS, key="f_ano_noticia")
+        
+    df_exibir_n = df_not.copy()
+    if not df_exibir_n.empty:
+        if filtro_mes_n != "Todos" and "mes" in df_exibir_n.columns:
+            df_exibir_n = df_exibir_n[df_exibir_n["mes"] == filtro_mes_n]
+        if filtro_ano_n != "Todos" and "ano" in df_exibir_n.columns:
+            df_exibir_n = df_exibir_n[df_exibir_n["ano"] == filtro_ano_n]
+            
+        if "created_at" in df_exibir_n.columns:
+            df_exibir_n = df_exibir_n.sort_values(by="created_at", ascending=False)
+            
+        cols_n_grid = st.columns(2)
+        for idx_n, (_, row_n) in enumerate(df_exibir_n.iterrows()):
+            with cols_n_grid[idx_n % 2]:
+                st.subheader(str(row_n.get("titulo", "")))
+                st.caption(f"📅 Referência: {row_n.get('mes', '')}/{row_n.get('ano', '')}")
                 if str(row_n.get("link_capa", "")).strip():
                     st.image(str(row_n["link_capa"]), width="stretch")
-                st.caption(f"Data: {row_n.get('data', '')}")
                 if str(row_n.get("link_drive", "")).strip():
                     st.markdown(f"📄 [Abrir Documento Completo / PDF]({row_n['link_drive']})")
                 st.markdown("---")
-    else:
-        st.info("Nenhuma notícia cadastrada.")
 
 # --- ABA 8: SOBRE ---
 with aba_sobre:
@@ -459,6 +461,6 @@ with aba_sobre:
     **Painel Geral de Gestão - Políticas e Atenção ao Idoso (SP)**
     
     - **Banco de Dados:** Google Sheets
-    - **Armazenamento de Mídia:** Google Drive (Pasta `imagAppIdoso`)
-    - **Modo de Acesso:** Leitura Aberta / Edição Protegida por Senha
+    - **Mídia e Documentos:** Google Drive (`imagAppIdoso`)
+    - **Modo de Edição:** Protegido por Senha
     """)
