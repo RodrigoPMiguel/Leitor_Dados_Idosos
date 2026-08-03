@@ -52,7 +52,11 @@ def salvar_aba(df, nome_aba):
     try:
         if sh is None: 
             return False
-        worksheet = sh.worksheet(nome_aba)
+        try:
+            worksheet = sh.worksheet(nome_aba)
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = sh.add_worksheet(title=nome_aba, rows="1000", cols="40")
+            
         worksheet.clear()
         
         # Prepara a lista com cabeçalhos e valores para o Google Sheets
@@ -63,6 +67,81 @@ def salvar_aba(df, nome_aba):
     except Exception as e:
         st.error(f"Erro ao salvar na aba {nome_aba}: {e}")
         return False
+
+# --- CARGA E CRUZAMENTO INICIAL DOS DADOS ---
+def inicializar_planilha_se_vazia():
+    # 1. Conselheiros Iniciais
+    df_cons = ler_aba("conselheiros")
+    if df_cons.empty:
+        dados_cons = pd.DataFrame([
+            {"id": 1, "nome": "Francisco Miguel Filho", "cargo": "Conselheiro", "telefone": "", "email": "", "regiao": "São Paulo", "observacoes": ""},
+            {"id": 2, "nome": "Vanessa Nassif", "cargo": "Conselheira", "telefone": "", "email": "", "regiao": "São Paulo", "observacoes": ""}
+        ])
+        salvar_aba(dados_cons, "conselheiros")
+
+    # 2. Cronograma Desmembrado (Word)
+    df_crono = ler_aba("cronograma_dados")
+    if df_crono.empty and os.path.exists("cronograma.docx"):
+        try:
+            doc = docx.Document("cronograma.docx")
+            if len(doc.tables) > 0:
+                rows_list = []
+                table = doc.tables[0]
+                for row in table.rows[3:]:
+                    txts = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
+                    if not txts or len(txts) < 18: continue
+                    distrito = txts[0]
+                    if not distrito or distrito.upper().startswith("ZONA") or distrito.upper().startswith("DISTRITOS"): continue
+                    
+                    def sep(val, q=2):
+                        if not val or val == '-' or val == '0-': return ['0'] * q
+                        p = [x.strip() for x in re.split(r'[-–—]', str(val)) if x.strip()]
+                        while len(p) < q: p.append('0')
+                        return p[:q]
+                    
+                    cras, creas = sep(txts[7], 2)
+                    ubs, ama = sep(txts[13], 2)
+                    ursi, upa = sep(txts[16], 2)
+                    cdi, pai = sep(txts[17], 2)
+                    ceu, cdc, ccint = sep(txts[18], 3)
+                    col18 = txts[19] if len(txts) > 19 else ""
+                    ilpi_2, cdia, nci_2 = sep(col18, 3)
+                    col19 = txts[20] if len(txts) > 20 else ""
+
+                    rows_list.append({
+                        "distrito": distrito, "ano_criacao": txts[1], "no_mapa": txts[2], "pop_total": txts[3],
+                        "pop_masc": txts[4], "pop_fem": txts[5], "subpref_sn": txts[6], "cras": cras, "creas": creas,
+                        "caei": txts[8].replace('-',''), "nci": txts[9].replace('-',''), "ilpi": txts[10].replace('-',''),
+                        "bpc": txts[11], "rank_vun": txts[12], "ubs": ubs, "ama": ama, "idrpg": txts[14], "emad": txts[15],
+                        "ursi": ursi, "upa": upa, "cdi": cdi, "pai": pai, "ceu": ceu, "cdc": cdc, "ccint": ccint,
+                        "ilpi_2setor": ilpi_2, "cdia": cdia, "nci_2setor": nci_2, "outros_projetos": col19
+                    })
+                if rows_list:
+                    salvar_aba(pd.DataFrame(rows_list), "cronograma_dados")
+        except Exception:
+            pass
+
+    # 3. Subprefeituras Totais (Excel)
+    df_sub = ler_aba("subprefeituras_dados")
+    if df_sub.empty and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
+        try:
+            df_t = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="TOTAIS").dropna(how="all")
+            if 'Unnamed: 0' in df_t.columns: df_t = df_t.drop(columns=['Unnamed: 0'])
+            salvar_aba(df_t, "subprefeituras_dados")
+        except Exception:
+            pass
+
+    # 4. Registros Base (Excel)
+    df_reg = ler_aba("registros_base")
+    if df_reg.empty and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
+        try:
+            df_b = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="Base de Dados", header=1).dropna(how="all")
+            salvar_aba(df_b, "registros_base")
+        except Exception:
+            pass
+
+# Executa a carga inicial automática se as abas estiverem vazias
+inicializar_planilha_se_vazia()
 
 # --- SENHAS DE ACESSO AO MODO EDIÇÃO ---
 SENHAS_VALIDAS = ["kico21688", "res1aaa", "res2aaa"]
@@ -84,7 +163,6 @@ MESES_MAPA = {
     "Maio": 5, "Junho": 6, "Julho": 7, "Agosto": 8,
     "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
 }
-
 
 # --- BARRA LATERAL (MODO EDIÇÃO COM SENHA) ---
 with st.sidebar:
