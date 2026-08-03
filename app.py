@@ -20,24 +20,24 @@ def conectar_gsheets():
             "https://www.googleapis.com/auth/drive"
         ]
         
-        # Converte o Secrets para um dicionário Python normal
+        # Converte o Secrets em dicionário nativo Python
         creds_dict = dict(st.secrets["connections"]["gsheets"])
         
-        # Trata as quebras de linha da private_key
+        # Corrige potenciais quebras de linha na private_key
         if "private_key" in creds_dict:
-            pk = creds_dict["private_key"]
-            pk = pk.replace("\\n", "\n").replace("\\\\n", "\n")
+            pk = str(creds_dict["private_key"])
+            pk = pk.replace("\\n", "\n")
             creds_dict["private_key"] = pk
-        
+            
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(credentials)
         
-        # Abre a planilha pela URL
         spreadsheet_url = creds_dict["spreadsheet"]
         sh = client.open_by_url(spreadsheet_url)
         return sh
     except Exception as e:
-        st.error(f"Erro ao conectar ao Google Sheets: {e}")
+        # Exibe a representação exata do erro
+        st.error(f"Erro ao conectar ao Google Sheets: {type(e).__name__} - {repr(e)}")
         return None
 
 # Instância da planilha aberta
