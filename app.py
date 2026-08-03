@@ -492,7 +492,7 @@ with aba_noticias:
 with aba_sobre:
     st.markdown("### Sobre o Sistema")
     st.markdown("""
-    **Painel Geral de Gestão - Políticas e Atenção ao Idoso (SP)**
+    **Painel Geral de Gestão - Políticas e Atenção ao Idoso (SP) - **
     **Desenvolvido por Rodrigo Prado Miguel e Francisco Miguel Filho**
     - **Banco de Dados:** Google Sheets
     - **Armazenamento Mídia:** Base64 Integrado
