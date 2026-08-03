@@ -4,4 +4,3 @@ openpyxl
 python-docx
 pymupdf
 streamlit-gsheets
-st-gsheets-connection
