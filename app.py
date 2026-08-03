@@ -20,12 +20,17 @@ def conectar_gsheets():
             "https://www.googleapis.com/auth/drive"
         ]
         
-        # Lê os dados de autenticação direto do Secrets do Streamlit
-        creds_dict = st.secrets["connections"]["gsheets"]
+        # Converte o Secrets em um dicionário Python editável
+        creds_dict = dict(st.secrets["connections"]["gsheets"])
+        
+        # Garante que as quebras de linha da chave privada sejam tratadas corretamente
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(credentials)
         
-        # Abre a planilha pela URL informada no Secrets
+        # Abre a planilha pela URL
         spreadsheet_url = creds_dict["spreadsheet"]
         sh = client.open_by_url(spreadsheet_url)
         return sh
