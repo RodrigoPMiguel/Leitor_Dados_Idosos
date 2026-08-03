@@ -2,19 +2,22 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 import docx
 import os
 import re
 import io
 import time
 import fitz  # PyMuPDF para converter PDF em imagem
+from PIL import Image
 
 # Configuração da página
 st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="wide")
 
-# --- CONEXÃO COM O GOOGLE SHEETS ---
+# --- CONEXÃO COM O GOOGLE SHEETS E DRIVE ---
 @st.cache_resource
-def conectar_gsheets():
+def conectar_google_services():
     try:
         scope = [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -28,18 +31,70 @@ def conectar_gsheets():
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
-        client = gspread.authorize(credentials)
         
+        client_sheets = gspread.authorize(credentials)
         spreadsheet_url = creds_dict["spreadsheet"]
-        sh = client.open_by_url(spreadsheet_url)
-        return sh
+        sh = client_sheets.open_by_url(spreadsheet_url)
+        
+        drive_service = build('drive', 'v3', credentials=credentials)
+        
+        return sh, drive_service
     except Exception as e:
-        st.error(f"Erro ao conectar ao Google Sheets: {e}")
-        return None
+        st.error(f"Erro ao conectar aos serviços do Google: {e}")
+        return None, None
 
-sh = conectar_gsheets()
+sh, drive_service = conectar_google_services()
 
-# --- FUNÇÕES AUXILIARES COM CACHE DE LEITURA (EVITA EXCEDER COTA) ---
+# --- FUNÇÃO PARA SALVAR ARQUIVOS NO GOOGLE DRIVE ---
+def upload_para_drive(file_bytes, filename, mime_type, folder_name="imagAppIdoso"):
+    try:
+        if drive_service is None:
+            return None, None
+            
+        # Busca a pasta imagAppIdoso
+        query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+        folders = results.get('files', [])
+        
+        if not folders:
+            # Se não achar a pasta, cria automaticamente
+            folder_metadata = {
+                'name': folder_name,
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
+            folder_id = folder.get('id')
+        else:
+            folder_id = folders[0]['id']
+            
+        # Metadados do arquivo
+        file_metadata = {
+            'name': filename,
+            'parents': [folder_id]
+        }
+        
+        media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
+        file_uploaded = drive_service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink, webContentLink'
+        ).execute()
+        
+        file_id = file_uploaded.get('id')
+        
+        # Torna o arquivo legível publicamente para exibir no Streamlit
+        permission = {'type': 'anyone', 'role': 'reader'}
+        drive_service.permissions().create(fileId=file_id, body=permission).execute()
+        
+        link_view = f"https://lh3.googleusercontent.com/d/{file_id}"
+        link_download = file_uploaded.get('webViewLink')
+        
+        return link_view, link_download
+    except Exception as e:
+        st.error(f"Erro no envio para o Google Drive: {e}")
+        return None, None
+
+# --- FUNÇÕES AUXILIARES COM CACHE DE LEITURA ---
 @st.cache_data(ttl=300)
 def ler_aba(nome_aba):
     try:
@@ -77,7 +132,6 @@ def salvar_aba(df, nome_aba):
             
         worksheet.clear()
         
-        # Converte datas e outros tipos não serializáveis em string
         df_clean = df.copy()
         for col in df_clean.columns:
             if pd.api.types.is_datetime64_any_dtype(df_clean[col]):
@@ -89,16 +143,14 @@ def salvar_aba(df, nome_aba):
         dados_lista = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
         worksheet.update(dados_lista)
         
-        # Limpa o cache de leitura para recarregar os dados atualizados
         st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Erro ao salvar na aba {nome_aba}: {e}")
         return False
 
-# --- CARGA E CRUZAMENTO INICIAL DOS DADOS ---
+# --- CARGA INICIAL DE DADOS ---
 def inicializar_planilha_se_vazia():
-    # 1. Conselheiros Iniciais
     df_cons = ler_aba("conselheiros")
     if df_cons.empty or (len(df_cons) == 1 and str(df_cons.iloc[0, 0]).strip() in ["1", "id"]):
         dados_cons = pd.DataFrame([
@@ -108,7 +160,6 @@ def inicializar_planilha_se_vazia():
         salvar_aba(dados_cons, "conselheiros")
         time.sleep(1)
 
-    # 2. Cronograma Desmembrado (Word)
     df_crono = ler_aba("cronograma_dados")
     if (df_crono.empty or (len(df_crono) == 1 and str(df_crono.iloc[0, 0]).strip() in ["1", "id"])) and os.path.exists("cronograma.docx"):
         try:
@@ -118,18 +169,14 @@ def inicializar_planilha_se_vazia():
                 table = doc.tables[0]
                 for row in table.rows[3:]:
                     txts = [cell.text.replace('\n', ' ').strip() for cell in row.cells]
-                    if not txts or len(txts) < 18:
-                        continue
+                    if not txts or len(txts) < 18: continue
                     distrito = txts[0]
-                    if not distrito or distrito.upper().startswith("ZONA") or distrito.upper().startswith("DISTRITOS"):
-                        continue
+                    if not distrito or distrito.upper().startswith("ZONA") or distrito.upper().startswith("DISTRITOS"): continue
                     
                     def sep(val, q=2):
-                        if not val or val == '-' or val == '0-':
-                            return ['0'] * q
+                        if not val or val == '-' or val == '0-': return ['0'] * q
                         p = [x.strip() for x in re.split(r'[-–—]', str(val)) if x.strip()]
-                        while len(p) < q:
-                            p.append('0')
+                        while len(p) < q: p.append('0')
                         return p[:q]
                     
                     cras, creas = sep(txts[7], 2)
@@ -155,19 +202,16 @@ def inicializar_planilha_se_vazia():
         except Exception:
             pass
 
-    # 3. Subprefeituras Totais (Excel)
     df_sub = ler_aba("subprefeituras_dados")
     if (df_sub.empty or (len(df_sub) == 1 and str(df_sub.iloc[0, 0]).strip() in ["1", "id"])) and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
         try:
             df_t = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="TOTAIS").dropna(how="all")
-            if 'Unnamed: 0' in df_t.columns:
-                df_t = df_t.drop(columns=['Unnamed: 0'])
+            if 'Unnamed: 0' in df_t.columns: df_t = df_t.drop(columns=['Unnamed: 0'])
             salvar_aba(df_t, "subprefeituras_dados")
             time.sleep(1)
         except Exception:
             pass
 
-    # 4. Registros Base (Excel)
     df_reg = ler_aba("registros_base")
     if (df_reg.empty or (len(df_reg) == 1 and str(df_reg.iloc[0, 0]).strip() in ["1", "id"])) and os.path.exists("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx"):
         try:
@@ -179,29 +223,21 @@ def inicializar_planilha_se_vazia():
 
 inicializar_planilha_se_vazia()
 
-# --- SENHAS DE ACESSO AO MODO EDIÇÃO ---
+# --- SENHAS DE ACESSO ---
 SENHAS_VALIDAS = ["kico21688", "res1aaa", "res2aaa"]
 
 if "modo_edicao" not in st.session_state:
     st.session_state["modo_edicao"] = False
 
-# --- FUNÇÃO AUXILIAR PARA GERAR RELATÓRIOS EM EXCEL ---
 def df_para_excel(df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Relatorio')
     return output.getvalue()
 
-MESES_MAPA = {
-    "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4,
-    "Maio": 5, "Junho": 6, "Julho": 7, "Agosto": 8,
-    "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
-}
-
 # --- BARRA LATERAL ---
 with st.sidebar:
     st.markdown("### 🔒 Controle de Acesso")
-    
     if not st.session_state["modo_edicao"]:
         st.info("👁️ **Modo Consulta (Leitura)**")
         senha_input = st.text_input("Digite a senha para editar:", type="password", key="input_senha")
@@ -241,33 +277,24 @@ aba_crono, aba_subpref, aba_conselheiros, aba_anotacoes, aba_registros, aba_mapa
 with aba_crono:
     st.markdown("### Cronograma por Distrito")
     df_crono = ler_aba("cronograma_dados")
-    
     if not df_crono.empty:
         distritos = ["Todos os Distritos"] + sorted(list(df_crono["distrito"].astype(str).unique()))
         distrito_sel = st.selectbox("🔍 Selecione o Distrito para Filtrar:", distritos)
-        
-        if distrito_sel != "Todos os Distritos":
-            df_exibir = df_crono[df_crono["distrito"] == distrito_sel]
-        else:
-            df_exibir = df_crono.copy()
+        df_exibir = df_crono[df_crono["distrito"] == distrito_sel] if distrito_sel != "Todos os Distritos" else df_crono.copy()
             
         if st.session_state["modo_edicao"]:
             df_editado = st.data_editor(df_exibir, num_rows="dynamic", key="editor_crono", width="stretch")
             if st.button("💾 Salvar Alterações (Cronograma)"):
-                if distrito_sel != "Todos os Distritos":
-                    df_crono.update(df_editado)
-                else:
-                    df_crono = df_editado
+                df_crono = df_editado if distrito_sel == "Todos os Distritos" else df_crono.update(df_editado)
                 if salvar_aba(df_crono, "cronograma_dados"):
                     st.success("Dados salvos com sucesso!")
                     st.rerun()
         else:
-            st.info("ℹ️ Tabela em modo de leitura. Para editar valores, insira a senha na barra lateral.")
+            st.info("ℹ️ Tabela em modo de leitura.")
             st.dataframe(df_exibir, width="stretch")
-            
         st.download_button("📥 Baixar Tabela em Excel", data=df_para_excel(df_exibir), file_name="Cronograma_Distritos.xlsx")
     else:
-        st.warning("Nenhum dado encontrado para o Cronograma.")
+        st.warning("Nenhum dado encontrado.")
 
 # --- ABA 2: SUBPREFEITURAS ---
 with aba_subpref:
@@ -283,8 +310,6 @@ with aba_subpref:
         else:
             st.dataframe(df_sub, width="stretch")
         st.download_button("📥 Baixar Subprefeituras em Excel", data=df_para_excel(df_sub), file_name="Subprefeituras.xlsx")
-    else:
-        st.warning("Nenhum dado de Subprefeituras encontrado.")
 
 # --- ABA 3: CONSELHEIROS MUNICIPAIS ---
 with aba_conselheiros:
@@ -331,32 +356,101 @@ with aba_registros:
         else:
             st.dataframe(df_reg, width="stretch")
         st.download_button("📥 Baixar Registros em Excel", data=df_para_excel(df_reg), file_name="Registros_Base.xlsx")
-    else:
-        st.warning("Nenhum registro encontrado na Base de Dados.")
 
 # --- ABA 6: FOTOS, MAPAS E LEGENDAS ---
 with aba_mapa:
-    st.markdown("### Visualização de Mapas e Documentos")
-    if os.path.exists("cronograma.docx"):
-        st.success("📄 Arquivo original `cronograma.docx` encontrado na raiz do projeto.")
-    else:
-        st.info("Nenhum documento de mapa anexado.")
-
-# --- ABA 7: NOTÍCIAS E PUBLICAÇÕES ---
-with aba_noticias:
-    st.markdown("### Publicações e PDF")
-    df_not = ler_aba("noticias_pdf")
-    if df_not.empty:
-        df_not = pd.DataFrame([{"titulo": "Inauguração do Centro Dia do Idoso", "link": "https://www.prefeitura.sp.gov.br", "data": "2026-08-03"}])
+    st.markdown("### 🗺️ Galeria de Fotos, Mapas e Legendas")
+    df_fotos = ler_aba("fotos_mapas")
     
     if st.session_state["modo_edicao"]:
-        df_edit_n = st.data_editor(df_not, num_rows="dynamic", key="editor_not", width="stretch")
-        if st.button("💾 Salvar Notícias"):
-            if salvar_aba(df_edit_n, "noticias_pdf"):
-                st.success("Notícias atualizadas!")
+        st.markdown("#### 📤 Upload de Nova Foto ou Mapa")
+        titulo_foto = st.text_input("Título / Descrição da Imagem:")
+        arquivo_foto = st.file_uploader("Selecione uma Imagem (JPG, PNG)", type=["jpg", "jpeg", "png"], key="up_foto")
+        
+        if st.button("🚀 Enviar Foto para o Google Drive") and arquivo_foto and titulo_foto:
+            bytes_foto = arquivo_foto.read()
+            link_img, link_drive = upload_para_drive(bytes_foto, arquivo_foto.name, arquivo_foto.type)
+            
+            if link_img:
+                novo_rec = pd.DataFrame([{
+                    "titulo": titulo_foto,
+                    "link_imagem": link_img,
+                    "link_drive": link_drive,
+                    "data": pd.Timestamp.now().strftime("%d/%m/%Y")
+                }])
+                df_fotos = pd.concat([df_fotos, novo_rec], ignore_index=True)
+                salvar_aba(df_fotos, "fotos_mapas")
+                st.success("Foto enviada e vinculada com sucesso!")
                 st.rerun()
+
+    if not df_fotos.empty:
+        cols = st.columns(3)
+        for idx, row in df_fotos.iterrows():
+            with cols[idx % 3]:
+                if str(row.get("link_imagem", "")).strip():
+                    st.image(str(row["link_imagem"]), caption=str(row.get("titulo", "Sem título")), width="stretch")
+                st.markdown(f"**{row.get('titulo', '')}**")
+                if str(row.get("link_drive", "")).strip():
+                    st.markdown(f"[🔗 Ver no Google Drive]({row['link_drive']})")
     else:
-        st.dataframe(df_not, width="stretch")
+        st.info("Nenhuma foto ou mapa cadastrado na galeria.")
+
+# --- ABA 7: NOTÍCIAS E PUBLICAÇÕES (COM PROCESSAMENTO DE PDF) ---
+with aba_noticias:
+    st.markdown("### 📰 Notícias e Boletins (PDF / Imagem)")
+    df_noticias = ler_aba("noticias_pdf")
+    
+    if st.session_state["modo_edicao"]:
+        st.markdown("#### 📤 Enviar Nova Notícia ou Boletim em PDF")
+        titulo_noticia = st.text_input("Título da Notícia / Boletim:")
+        arquivo_pdf = st.file_uploader("Selecione o arquivo PDF ou Imagem", type=["pdf", "png", "jpg", "jpeg"], key="up_noticia")
+        
+        if st.button("🚀 Processar e Enviar Notícia") and arquivo_pdf and titulo_noticia:
+            bytes_file = arquivo_pdf.read()
+            
+            # Se for PDF, extrai a 1ª página como imagem de capa (fitz)
+            if arquivo_pdf.name.lower().endswith('.pdf'):
+                try:
+                    doc = fitz.open(stream=bytes_file, filetype="pdf")
+                    page = doc[0]
+                    pix = page.get_pixmap()
+                    img_bytes = pix.tobytes("png")
+                    
+                    # Upload da imagem da capa
+                    capa_link, _ = upload_para_drive(img_bytes, f"capa_{arquivo_pdf.name}.png", "image/png")
+                    # Upload do PDF completo
+                    pdf_link, link_drive = upload_para_drive(bytes_file, arquivo_pdf.name, "application/pdf")
+                except Exception as e:
+                    st.error(f"Erro ao extrair capa do PDF: {e}")
+                    capa_link, link_drive = None, None
+            else:
+                capa_link, link_drive = upload_para_drive(bytes_file, arquivo_pdf.name, arquivo_pdf.type)
+            
+            if link_drive:
+                nova_noticia = pd.DataFrame([{
+                    "titulo": titulo_noticia,
+                    "link_capa": capa_link if capa_link else "",
+                    "link_drive": link_drive,
+                    "data": pd.Timestamp.now().strftime("%d/%m/%Y")
+                }])
+                df_noticias = pd.concat([df_noticias, nova_noticia], ignore_index=True)
+                salvar_aba(df_noticias, "noticias_pdf")
+                st.success("Notícia/Boletim cadastrado com sucesso!")
+                st.rerun()
+
+    if not df_noticias.empty:
+        cols_n = st.columns(2)
+        for idx_n, row_n in df_noticias.iterrows():
+            with cols_n[idx_n % 2]:
+                st.subheader(str(row_n.get("titulo", "Sem Título")))
+                if str(row_n.get("link_capa", "")).strip():
+                    st.image(str(row_n["link_capa"]), width="stretch")
+                st.caption(f"Data: {row_n.get('data', '')}")
+                if str(row_n.get("link_drive", "")).strip():
+                    st.markdown(f"📄 [Abrir Documento Completo / PDF]({row_n['link_drive']})")
+                st.markdown("---")
+    else:
+        st.info("Nenhuma notícia cadastrada.")
 
 # --- ABA 8: SOBRE ---
 with aba_sobre:
@@ -364,8 +458,7 @@ with aba_sobre:
     st.markdown("""
     **Painel Geral de Gestão - Políticas e Atenção ao Idoso (SP)**
     
-    Este sistema é uma ferramenta para monitoramento de equipamentos sociais, conselheiros municipais e registros de atenção à pessoa idosa na cidade de São Paulo.
-    
-    - **Sincronização:** Google Sheets API
+    - **Banco de Dados:** Google Sheets
+    - **Armazenamento de Mídia:** Google Drive (Pasta `imagAppIdoso`)
     - **Modo de Acesso:** Leitura Aberta / Edição Protegida por Senha
     """)
