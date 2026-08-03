@@ -20,12 +20,14 @@ def conectar_gsheets():
             "https://www.googleapis.com/auth/drive"
         ]
         
-        # Converte o Secrets em um dicionário Python editável
+        # Converte o Secrets para um dicionário Python normal
         creds_dict = dict(st.secrets["connections"]["gsheets"])
         
-        # Garante que as quebras de linha da chave privada sejam tratadas corretamente
+        # Trata as quebras de linha da private_key
         if "private_key" in creds_dict:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+            pk = creds_dict["private_key"]
+            pk = pk.replace("\\n", "\n").replace("\\\\n", "\n")
+            creds_dict["private_key"] = pk
         
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(credentials)
