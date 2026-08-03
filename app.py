@@ -7,7 +7,7 @@ import os
 import re
 import io
 import time
-import base64
+import requests
 import fitz  # PyMuPDF
 from PIL import Image
 
@@ -41,29 +41,40 @@ def conectar_gsheets():
 
 sh = conectar_gsheets()
 
-# --- FUNÇÃO DE COMPRESSÃO E CONVERSÃO DE IMAGEM PARA BASE64 (RESPEITANDO LIMITE DO GOOGLE SHEETS) ---
-def comprimir_e_converter_base64(file_bytes, max_dim=800, qualidade=65):
+# --- FUNÇÃO DE UPLOAD DE IMAGEM VIA IMGBB (GERA URL CURTA COMPATÍVEL COM GOOGLE SHEETS) ---
+def upload_imagem_imgbb(file_bytes):
     try:
-        # Abre a imagem usando PIL
+        # Recupera a chave da API do Secrets
+        api_key = st.secrets.get("IMGBB_API_KEY", "")
+        if not api_key:
+            st.error("Chave 'IMGBB_API_KEY' não encontrada no Secrets do Streamlit!")
+            return None
+
+        # Otimiza a imagem com PIL antes do upload
         img = Image.open(io.BytesIO(file_bytes))
-        
-        # Converte para RGB se estiver em RGBA/P
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
-            
-        # Redimensiona proporcionalmente mantendo no máximo max_dim pixels
-        img.thumbnail((max_dim, max_dim), Image.LANCZOS)
+        img.thumbnail((1200, 1200), Image.LANCZOS)
         
-        # Salva comprimido em memória
         buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=qualidade, optimize=True)
-        compressed_bytes = buffer.getvalue()
+        img.save(buffer, format="JPEG", quality=80, optimize=True)
+        img_bytes_compressed = buffer.getvalue()
+
+        # Envia para a API do ImgBB
+        url = "https://api.imgbb.com/1/upload"
+        payload = {"key": api_key}
+        files = {"image": img_bytes_compressed}
         
-        # Codifica para Base64
-        encoded = base64.b64encode(compressed_bytes).decode('utf-8')
-        return f"data:image/jpeg;base64,{encoded}"
+        response = requests.post(url, data=payload, files=files)
+        data = response.json()
+        
+        if response.status_code == 200 and data.get("success"):
+            return data["data"]["url"]  # Retorna a URL curta da imagem
+        else:
+            st.error(f"Erro no serviço de hospedagem ImgBB: {data.get('error', {}).get('message', 'Falha no envio')}")
+            return None
     except Exception as e:
-        st.error(f"Erro ao otimizar e comprimir imagem: {e}")
+        st.error(f"Erro ao fazer upload da imagem: {e}")
         return None
 
 # --- FUNÇÕES AUXILIARES COM CACHE DE LEITURA ---
@@ -303,9 +314,9 @@ with aba_conselheiros:
                 btn_cadastrar_cons = st.form_submit_button("💾 Cadastrar Conselheiro")
                 
                 if btn_cadastrar_cons and nome_c:
-                    foto_b64 = ""
+                    url_foto = ""
                     if foto_c:
-                        foto_b64 = comprimir_e_converter_base64(foto_c.read())
+                        url_foto = upload_imagem_imgbb(foto_c.read())
                     
                     novo_id = len(df_cons) + 1
                     novo_cons = pd.DataFrame([{
@@ -315,7 +326,7 @@ with aba_conselheiros:
                         "telefone": telefone_c,
                         "email": email_c,
                         "regiao": regiao_c,
-                        "foto": foto_b64 if foto_b64 else "",
+                        "foto": url_foto if url_foto else "",
                         "observacoes": obs_c
                     }])
                     df_cons = pd.concat([df_cons, novo_cons], ignore_index=True)
@@ -393,14 +404,14 @@ with aba_mapa:
                 
                 if btn_env_f and tit_f and file_f:
                     bytes_f = file_f.read()
-                    b64_img = comprimir_e_converter_base64(bytes_f)
+                    url_img = upload_imagem_imgbb(bytes_f)
                     
-                    if b64_img:
+                    if url_img:
                         nova_f = pd.DataFrame([{
                             "titulo": tit_f,
                             "mes": mes_f,
                             "ano": ano_f,
-                            "link_imagem": b64_img,
+                            "link_imagem": url_img,
                             "created_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                         }])
                         df_fotos = pd.concat([df_fotos, nova_f], ignore_index=True)
@@ -453,26 +464,26 @@ with aba_noticias:
                 
                 if btn_env_n and tit_n and file_n:
                     bytes_n = file_n.read()
-                    capa_b64 = None
+                    url_capa = None
                     
                     if file_n.name.lower().endswith('.pdf'):
                         try:
                             doc = fitz.open(stream=bytes_n, filetype="pdf")
                             page = doc[0]
-                            pix = page.get_pixmap(dpi=100) # Renderiza a capa
+                            pix = page.get_pixmap(dpi=120)
                             capa_bytes = pix.tobytes("png")
-                            capa_b64 = comprimir_e_converter_base64(capa_bytes)
+                            url_capa = upload_imagem_imgbb(capa_bytes)
                         except Exception as e:
                             st.error(f"Erro ao converter a 1ª página do PDF: {e}")
                     else:
-                        capa_b64 = comprimir_e_converter_base64(bytes_n)
+                        url_capa = upload_imagem_imgbb(bytes_n)
                         
-                    if capa_b64:
+                    if url_capa:
                         nova_n = pd.DataFrame([{
                             "titulo": tit_n,
                             "mes": mes_n,
                             "ano": ano_n,
-                            "link_capa": capa_b64,
+                            "link_capa": url_capa,
                             "created_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                         }])
                         df_not = pd.concat([df_not, nova_n], ignore_index=True)
@@ -512,6 +523,6 @@ with aba_sobre:
     **Painel Geral de Gestão - Políticas e Atenção ao Idoso (SP)**
     
     - **Banco de Dados:** Google Sheets
-    - **Armazenamento de Mídia:** Base64 Otimizado
+    - **Armazenamento Mídia:** ImgBB Cloud API
     - **Modo de Edição:** Protegido por Senha
     """)
