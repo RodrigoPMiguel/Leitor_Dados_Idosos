@@ -11,7 +11,7 @@ import fitz  # PyMuPDF para converter PDF em imagem
 # Configuração da página
 st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="wide")
 
-# --- CONEXÃO COM O GOOGLE SHEETS (USANDO GSPREAD) ---
+# --- CONEXÃO COM O GOOGLE SHEETS (USANDO GSPREAD SEM CACHE DE DISCO) ---
 @st.cache_resource
 def conectar_gsheets():
     try:
@@ -20,26 +20,28 @@ def conectar_gsheets():
             "https://www.googleapis.com/auth/drive"
         ]
         
-        # Converte o Secrets em dicionário nativo Python
-        creds_dict = dict(st.secrets["connections"]["gsheets"])
+        # Lê o dicionário direto do Secrets
+        creds_raw = st.secrets["connections"]["gsheets"]
+        creds_dict = {k: v for k, v in creds_raw.items()}
         
-        # Corrige potenciais quebras de linha na private_key
+        # Garante que as quebras de linha da private_key sejam formatadas corretamente
         if "private_key" in creds_dict:
-            pk = str(creds_dict["private_key"])
-            pk = pk.replace("\\n", "\n")
-            creds_dict["private_key"] = pk
-            
-        credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        
+        # Desativa tentativa de ler credenciais do SO/ambiente
+        credentials = Credentials.from_service_account_info(
+            creds_dict, 
+            scopes=scope
+        )
+        
         client = gspread.authorize(credentials)
         
         spreadsheet_url = creds_dict["spreadsheet"]
         sh = client.open_by_url(spreadsheet_url)
         return sh
     except Exception as e:
-        # Exibe a representação exata do erro
-        st.error(f"Erro ao conectar ao Google Sheets: {type(e).__name__} - {repr(e)}")
+        st.error(f"Erro de Conexão: {type(e).__name__} - {str(e)}")
         return None
-
 # Instância da planilha aberta
 sh = conectar_gsheets()
 
