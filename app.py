@@ -277,6 +277,17 @@ with aba_crono:
         df_exibir = df_crono[df_crono["distrito"] == distrito_sel] if distrito_sel != "Todos os Distritos" else df_crono.copy()
             
         if st.session_state["modo_edicao"]:
+            with st.expander("➕ Adicionar Nova Coluna no Cronograma", expanded=False):
+                nova_col_crono = st.text_input("Nome da Nova Coluna (Cronograma):", key="in_col_crono")
+                if st.button("➕ Criar Coluna", key="btn_add_crono") and nova_col_crono:
+                    if nova_col_crono not in df_crono.columns:
+                        df_crono[nova_col_crono] = ""
+                        if salvar_aba(df_crono, "cronograma_dados"):
+                            st.success(f"Coluna '{nova_col_crono}' criada com sucesso!")
+                            st.rerun()
+                    else:
+                        st.warning("Essa coluna já existe na tabela.")
+
             df_editado = st.data_editor(df_exibir, num_rows="dynamic", key="editor_crono", width="stretch")
             if st.button("💾 Salvar Alterações (Cronograma)"):
                 if distrito_sel == "Todos os Distritos":
@@ -296,6 +307,17 @@ with aba_subpref:
     df_sub = ler_aba("subprefeituras_dados")
     if not df_sub.empty:
         if st.session_state["modo_edicao"]:
+            with st.expander("➕ Adicionar Nova Coluna em Subprefeituras", expanded=False):
+                nova_col_sub = st.text_input("Nome da Nova Coluna (Subprefeituras):", key="in_col_sub")
+                if st.button("➕ Criar Coluna", key="btn_add_sub") and nova_col_sub:
+                    if nova_col_sub not in df_sub.columns:
+                        df_sub[nova_col_sub] = ""
+                        if salvar_aba(df_sub, "subprefeituras_dados"):
+                            st.success(f"Coluna '{nova_col_sub}' criada com sucesso!")
+                            st.rerun()
+                    else:
+                        st.warning("Essa coluna já existe na tabela.")
+
             df_edit = st.data_editor(df_sub, num_rows="dynamic", key="editor_sub", width="stretch")
             if st.button("💾 Salvar Alterações (Subprefeituras)"):
                 if salvar_aba(df_edit, "subprefeituras_dados"):
@@ -425,6 +447,17 @@ with aba_registros:
     st.markdown("### Registros Gerais e Casas de Repouso")
     df_reg = ler_aba("registros_base")
     if st.session_state["modo_edicao"]:
+        with st.expander("➕ Adicionar Nova Coluna na Base de Registros", expanded=False):
+            nova_col_reg = st.text_input("Nome da Nova Coluna (Registros):", key="in_col_reg")
+            if st.button("➕ Criar Coluna", key="btn_add_reg") and nova_col_reg:
+                if nova_col_reg not in df_reg.columns:
+                    df_reg[nova_col_reg] = ""
+                    if salvar_aba(df_reg, "registros_base"):
+                        st.success(f"Coluna '{nova_col_reg}' criada com sucesso!")
+                        st.rerun()
+                else:
+                    st.warning("Essa coluna já existe na tabela.")
+
         df_edit_r = st.data_editor(df_reg, num_rows="dynamic", key="editor_reg", width="stretch")
         if st.button("💾 Salvar Registros"):
             if salvar_aba(df_edit_r, "registros_base"):
@@ -609,8 +642,8 @@ with aba_sobre:
     st.markdown("### Sobre o Sistema")
     st.markdown("""
     **Painel Geral de Gestão - Políticas e Atenção ao Idoso (SP)**
-    
+     - Desenvolvido por Rodrigo Prado Miguel e Francisco Miguel Filho
     - **Banco de Dados:** Google Sheets
-    - **Mídias e PDFs:** ImgBB Cloud API + Leitor Multi-Página
+    - **Armazenamento Mídia:** Base64 Integrado
     - **Modo de Edição:** Protegido por Senha
     """)
