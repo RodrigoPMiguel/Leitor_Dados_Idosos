@@ -305,6 +305,25 @@ with aba_subpref:
             st.dataframe(df_sub, width="stretch")
         st.download_button("📥 Baixar Subprefeituras em Excel", data=df_para_excel(df_sub), file_name="Subprefeituras.xlsx")
 
+# --- MODAL PARA DETALHES DO CONSELHEIRO ---
+@st.dialog("👤 Ficha Cadastral do Conselheiro", width="medium")
+def modal_detalhes_conselheiro(row):
+    st.subheader(str(row.get("nome", "Conselheiro")))
+    col_m1, col_m2 = st.columns([1, 2])
+    with col_m1:
+        if str(row.get("foto", "")).strip():
+            st.image(str(row["foto"]), width=150)
+        else:
+            st.markdown("👤 *Sem foto cadastrada*")
+    with col_m2:
+        st.markdown(f"**Cargo / Função:** {row.get('cargo', '-')}")
+        st.markdown(f"**Região / Subprefeitura:** {row.get('regiao', '-')}")
+        st.markdown(f"**Telefone:** {row.get('telefone', '-')}")
+        st.markdown(f"**E-mail:** {row.get('email', '-')}")
+    st.markdown("---")
+    if str(row.get("observacoes", "")).strip():
+        st.markdown(f"**Observações:**\n{row.get('observacoes')}")
+
 # --- ABA 3: CONSELHEIROS MUNICIPAIS ---
 with aba_conselheiros:
     st.markdown("### 👥 Conselheiros Municipais")
@@ -347,7 +366,23 @@ with aba_conselheiros:
                         st.success("Conselheiro cadastrado com sucesso!")
                         st.rerun()
 
-        st.markdown("---")
+        st.markdown("#### Lista de Conselheiros (Edição e Exclusão rápida)")
+        if not df_cons.empty:
+            for orig_idx_c, c_row in df_cons.iterrows():
+                col_i1, col_i2, col_i3 = st.columns([3, 2, 1])
+                with col_i1:
+                    st.write(f"**{c_row.get('nome', '')}** ({c_row.get('cargo', '')})")
+                with col_i2:
+                    st.caption(f"📍 {c_row.get('regiao', '-')}")
+                with col_i3:
+                    if st.button("🗑️ Apagar", key=f"btn_del_cons_{orig_idx_c}"):
+                        df_cons = df_cons.drop(index=orig_idx_c)
+                        if salvar_aba(df_cons, "conselheiros"):
+                            st.success("Conselheiro removido!")
+                            st.rerun()
+            st.markdown("---")
+            
+        st.markdown("#### Tabela Geral de Conselheiros")
         df_edit_c = st.data_editor(df_cons, num_rows="dynamic", key="editor_cons", width="stretch")
         if st.button("💾 Salvar Alterações Tabela (Conselheiros)"):
             if salvar_aba(df_edit_c, "conselheiros"):
@@ -355,21 +390,22 @@ with aba_conselheiros:
                 st.rerun()
     else:
         if not df_cons.empty:
-            for _, c_row in df_cons.iterrows():
-                with st.container():
-                    col_img, col_info = st.columns([1, 4])
-                    with col_img:
-                        if str(c_row.get("foto", "")).strip():
-                            st.image(str(c_row["foto"]), width=120)
-                        else:
-                            st.markdown("👤 *Sem foto*")
-                    with col_info:
-                        st.markdown(f"**{c_row.get('nome', '')}** — *{c_row.get('cargo', '')}*")
-                        st.write(f"📞 Telefone: {c_row.get('telefone', '')} | ✉️ E-mail: {c_row.get('email', '')}")
-                        st.write(f"📍 Região: {c_row.get('regiao', '')}")
-                        if str(c_row.get("observacoes", "")).strip():
-                            st.caption(f"Obs: {c_row.get('observacoes', '')}")
+            cols_grid_c = st.columns(3)
+            for idx_c, (_, c_row) in enumerate(df_cons.iterrows()):
+                with cols_grid_c[idx_c % 3]:
+                    st.markdown(f"### {c_row.get('nome', '')}")
+                    st.markdown(f"📍 **Região:** {c_row.get('regiao', '-')}")
+                    
+                    if str(c_row.get("foto", "")).strip():
+                        st.image(str(c_row["foto"]), width=100)
+                    else:
+                        st.caption("👤 *Sem foto*")
+                        
+                    if st.button("👤 Ver Ficha / Detalhes", key=f"btn_ficha_{idx_c}"):
+                        modal_detalhes_conselheiro(c_row)
                     st.markdown("---")
+        else:
+            st.info("Nenhum conselheiro cadastrado.")
 
 # --- ABA 4: ANOTAÇÕES IMPORTANTES ---
 with aba_anotacoes:
