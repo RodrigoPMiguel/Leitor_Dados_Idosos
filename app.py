@@ -85,7 +85,6 @@ def processar_pdf_todas_paginas(pdf_bytes):
             url_pag = upload_imagem_imgbb(img_bytes)
             if url_pag:
                 links_paginas.append(url_pag)
-        # Retorna os links separados por vírgula
         return "|".join(links_paginas)
     except Exception as e:
         st.error(f"Erro ao processar páginas do PDF: {e}")
@@ -456,15 +455,25 @@ with aba_mapa:
         if "created_at" in df_exibir_f.columns:
             df_exibir_f = df_exibir_f.sort_values(by="created_at", ascending=False)
             
-        cols_grid = st.columns(4) # Miniaturas em 4 colunas
-        for i, (_, row_f) in enumerate(df_exibir_f.iterrows()):
+        cols_grid = st.columns(4)
+        for i, (original_idx, row_f) in enumerate(df_exibir_f.iterrows()):
             with cols_grid[i % 4]:
                 st.markdown(f"**{row_f.get('titulo', '')}**")
                 if str(row_f.get("link_imagem", "")).strip():
-                    st.image(str(row_f["link_imagem"]), width=220) # Miniatura fixa
+                    st.image(str(row_f["link_imagem"]), width=220)
                 st.caption(f"📅 Referência: {row_f.get('mes', '')}/{row_f.get('ano', '')}")
-                if st.button("🔍 Expandir / Zoom", key=f"btn_zoom_{i}"):
-                    modal_zoom_imagem(row_f.get('titulo', ''), row_f['link_imagem'], row_f.get('mes', ''), row_f.get('ano', ''))
+                
+                c_b1, c_b2 = st.columns(2)
+                with c_b1:
+                    if st.button("🔍 Expandir", key=f"btn_zoom_{i}"):
+                        modal_zoom_imagem(row_f.get('titulo', ''), row_f['link_imagem'], row_f.get('mes', ''), row_f.get('ano', ''))
+                with c_b2:
+                    if st.session_state["modo_edicao"]:
+                        if st.button("🗑️ Apagar", key=f"btn_del_foto_{i}"):
+                            df_fotos = df_fotos.drop(index=original_idx)
+                            if salvar_aba(df_fotos, "fotos_mapas"):
+                                st.success("Foto removida!")
+                                st.rerun()
                 st.markdown("---")
 
 # --- MODAL PARA LEITURA COMPLETA DE PDF (TODAS AS PÁGINAS) ---
@@ -478,7 +487,7 @@ def modal_leitor_pdf(titulo, links_str):
         st.image(url_pag, use_column_width=True)
         st.markdown("---")
 
-# --- ABA 7: NOTÍCIAS E PUBLICAÇÕES (COM SUPORTE MULTI-PÁGINA PDF) ---
+# --- ABA 7: NOTÍCIAS E PUBLICAÇÕES ---
 with aba_noticias:
     st.markdown("### 📰 Notícias e Publicações (PDF / Imagem)")
     df_not = ler_aba("noticias_pdf")
@@ -537,16 +546,26 @@ with aba_noticias:
             df_exibir_n = df_exibir_n.sort_values(by="created_at", ascending=False)
             
         cols_n_grid = st.columns(3)
-        for idx_n, (_, row_n) in enumerate(df_exibir_n.iterrows()):
+        for idx_n, (orig_idx_n, row_n) in enumerate(df_exibir_n.iterrows()):
             with cols_n_grid[idx_n % 3]:
                 st.subheader(str(row_n.get("titulo", "")))
                 if str(row_n.get("link_capa", "")).strip():
-                    st.image(str(row_n["link_capa"]), width=240) # Capa em miniatura
+                    st.image(str(row_n["link_capa"]), width=240)
                 st.caption(f"📅 Referência: {row_n.get('mes', '')}/{row_n.get('ano', '')}")
                 
                 todas_pags = str(row_n.get("todas_paginas", row_n.get("link_capa", "")))
-                if st.button("📖 Abrir Boletim Completo", key=f"btn_pdf_{idx_n}"):
-                    modal_leitor_pdf(row_n.get('titulo', ''), todas_pags)
+                
+                cb_n1, cb_n2 = st.columns(2)
+                with cb_n1:
+                    if st.button("📖 Abrir Boletim", key=f"btn_pdf_{idx_n}"):
+                        modal_leitor_pdf(row_n.get('titulo', ''), todas_pags)
+                with cb_n2:
+                    if st.session_state["modo_edicao"]:
+                        if st.button("🗑️ Apagar", key=f"btn_del_not_{idx_n}"):
+                            df_not = df_not.drop(index=orig_idx_n)
+                            if salvar_aba(df_not, "noticias_pdf"):
+                                st.success("Publicação removida!")
+                                st.rerun()
                 st.markdown("---")
 
 # --- ABA 8: SOBRE ---
