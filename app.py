@@ -6,12 +6,13 @@ import docx
 import os
 import re
 import io
+import time
 import fitz  # PyMuPDF para converter PDF em imagem
 
 # Configuração da página
 st.set_page_config(page_title="Painel de Gestão - Defesa do Idoso SP", layout="wide")
 
-# --- CONEXÃO COM O GOOGLE SHEETS (USANDO GSPREAD) ---
+# --- CONEXÃO COM O GOOGLE SHEETS ---
 @st.cache_resource
 def conectar_gsheets():
     try:
@@ -38,7 +39,8 @@ def conectar_gsheets():
 
 sh = conectar_gsheets()
 
-# --- FUNÇÕES AUXILIARES PARA LER E SALVAR ABA A ABA ---
+# --- FUNÇÕES AUXILIARES COM CACHE DE LEITURA (EVITA EXCEDER COTA) ---
+@st.cache_data(ttl=300)
 def ler_aba(nome_aba):
     try:
         if sh is None:
@@ -75,19 +77,20 @@ def salvar_aba(df, nome_aba):
             
         worksheet.clear()
         
-        # --- CORREÇÃO: CONVERTE DATAS PARA TEXTO ---
+        # Converte datas e outros tipos não serializáveis em string
         df_clean = df.copy()
         for col in df_clean.columns:
-            # Verifica se a coluna contém objetos datetime
             if pd.api.types.is_datetime64_any_dtype(df_clean[col]):
                 df_clean[col] = df_clean[col].dt.strftime('%d/%m/%Y %H:%M:%S')
-            # Garante que qualquer outro tipo não serializável seja convertido para string
             else:
                 df_clean[col] = df_clean[col].astype(str)
         
         df_clean = df_clean.fillna("")
         dados_lista = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
         worksheet.update(dados_lista)
+        
+        # Limpa o cache de leitura para recarregar os dados atualizados
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Erro ao salvar na aba {nome_aba}: {e}")
@@ -99,10 +102,11 @@ def inicializar_planilha_se_vazia():
     df_cons = ler_aba("conselheiros")
     if df_cons.empty or (len(df_cons) == 1 and str(df_cons.iloc[0, 0]).strip() in ["1", "id"]):
         dados_cons = pd.DataFrame([
-            {"id": 1, "nome": "Francisco Miguel Filho", "cargo": "Conselheiro", "telefone": "", "email": "", "regiao": "São Paulo", "observacoes": ""},
-            {"id": 2, "nome": "Vanessa Nassif", "cargo": "Conselheira", "telefone": "", "email": "", "regiao": "São Paulo", "observacoes": ""}
+            {"id": "1", "nome": "Francisco Miguel Filho", "cargo": "Conselheiro", "telefone": "", "email": "", "regiao": "São Paulo", "observacoes": ""},
+            {"id": "2", "nome": "Vanessa Nassif", "cargo": "Conselheira", "telefone": "", "email": "", "regiao": "São Paulo", "observacoes": ""}
         ])
         salvar_aba(dados_cons, "conselheiros")
+        time.sleep(1)
 
     # 2. Cronograma Desmembrado (Word)
     df_crono = ler_aba("cronograma_dados")
@@ -147,8 +151,9 @@ def inicializar_planilha_se_vazia():
                     })
                 if rows_list:
                     salvar_aba(pd.DataFrame(rows_list), "cronograma_dados")
-        except Exception as e:
-            st.error(f"Erro ao processar cronograma.docx: {e}")
+                    time.sleep(1)
+        except Exception:
+            pass
 
     # 3. Subprefeituras Totais (Excel)
     df_sub = ler_aba("subprefeituras_dados")
@@ -158,8 +163,9 @@ def inicializar_planilha_se_vazia():
             if 'Unnamed: 0' in df_t.columns:
                 df_t = df_t.drop(columns=['Unnamed: 0'])
             salvar_aba(df_t, "subprefeituras_dados")
-        except Exception as e:
-            st.error(f"Erro ao processar Subprefeituras Excel: {e}")
+            time.sleep(1)
+        except Exception:
+            pass
 
     # 4. Registros Base (Excel)
     df_reg = ler_aba("registros_base")
@@ -167,34 +173,32 @@ def inicializar_planilha_se_vazia():
         try:
             df_b = pd.read_excel("Tabela Geral de Registros 2024 RECUPERADO (1).xlsx", sheet_name="Base de Dados", header=1).dropna(how="all")
             salvar_aba(df_b, "registros_base")
-        except Exception as e:
-            st.error(f"Erro ao processar Base de Dados Excel: {e}")
+            time.sleep(1)
+        except Exception:
+            pass
 
-# Executa a carga inicial automática
 inicializar_planilha_se_vazia()
 
 # --- SENHAS DE ACESSO AO MODO EDIÇÃO ---
 SENHAS_VALIDAS = ["kico21688", "res1aaa", "res2aaa"]
 
-# Controle de estado do login
 if "modo_edicao" not in st.session_state:
     st.session_state["modo_edicao"] = False
 
-# --- FUNÇÃO AUXILIAR PARA GERAR RELATÓRIOS EM EXCEL (.XLSX) ---
+# --- FUNÇÃO AUXILIAR PARA GERAR RELATÓRIOS EM EXCEL ---
 def df_para_excel(df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Relatorio')
     return output.getvalue()
 
-# Mapeamento de meses para ordenação numérica
 MESES_MAPA = {
     "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4,
     "Maio": 5, "Junho": 6, "Julho": 7, "Agosto": 8,
     "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
 }
 
-# --- BARRA LATERAL (MODO EDIÇÃO COM SENHA) ---
+# --- BARRA LATERAL ---
 with st.sidebar:
     st.markdown("### 🔒 Controle de Acesso")
     
@@ -255,7 +259,7 @@ with aba_crono:
                 else:
                     df_crono = df_editado
                 if salvar_aba(df_crono, "cronograma_dados"):
-                    st.success("Dados salvos com sucesso no Google Sheets!")
+                    st.success("Dados salvos com sucesso!")
                     st.rerun()
         else:
             st.info("ℹ️ Tabela em modo de leitura. Para editar valores, insira a senha na barra lateral.")
@@ -302,7 +306,7 @@ with aba_anotacoes:
     st.markdown("### Anotações Importantes")
     df_anot = ler_aba("anotacoes")
     if df_anot.empty:
-        df_anot = pd.DataFrame([{"id": 1, "titulo": "Anotação Inicial", "conteudo": "Digite aqui observações relevantes sobre a gestão.", "data": "2026-08-03"}])
+        df_anot = pd.DataFrame([{"id": "1", "titulo": "Anotação Inicial", "conteudo": "Digite aqui observações relevantes sobre a gestão.", "data": "2026-08-03"}])
     
     if st.session_state["modo_edicao"]:
         df_edit_a = st.data_editor(df_anot, num_rows="dynamic", key="editor_anot", width="stretch")
