@@ -48,8 +48,23 @@ def ler_aba(nome_aba):
     try:
         if sh is None: 
             return pd.DataFrame()
-        worksheet = sh.worksheet(nome_aba)
+        
+        # Tenta pegar a aba; se não existir, cria uma nova automaticamente
+        try:
+            worksheet = sh.worksheet(nome_aba)
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = sh.add_worksheet(title=nome_aba, rows="1000", cols="40")
+            return pd.DataFrame()
+            
         data = worksheet.get_all_records()
+        if not data:
+            # Caso a aba esteja vazia ou só tenha texto na linha 1
+            all_values = worksheet.get_all_values()
+            if len(all_values) > 1:
+                df = pd.DataFrame(all_values[1:], columns=all_values[0])
+                return df.dropna(how="all")
+            return pd.DataFrame()
+            
         df = pd.DataFrame(data)
         return df.dropna(how="all")
     except Exception as e:
@@ -59,6 +74,7 @@ def salvar_aba(df, nome_aba):
     try:
         if sh is None: 
             return False
+            
         try:
             worksheet = sh.worksheet(nome_aba)
         except gspread.exceptions.WorksheetNotFound:
@@ -66,7 +82,6 @@ def salvar_aba(df, nome_aba):
             
         worksheet.clear()
         
-        # Prepara a lista com cabeçalhos e valores para o Google Sheets
         df_clean = df.fillna("")
         dados_lista = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
         worksheet.update(dados_lista)
