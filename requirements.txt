@@ -1,6 +1,6 @@
-streamlit 
-pandas 
-openpyxl 
-python-docx 
+streamlit
+pandas
+openpyxl
+python-docx
 pymupdf
 streamlit-gsheets
