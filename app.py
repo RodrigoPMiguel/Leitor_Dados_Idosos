@@ -44,31 +44,45 @@ def conectar_google_services():
 
 sh, drive_service = conectar_google_services()
 
-# --- FUNÇÃO PARA UPLOAD DE ARQUIVOS NO GOOGLE DRIVE ---
+# --- FUNÇÃO PARA UPLOAD DE ARQUIVOS NO GOOGLE DRIVE (TRANSFERINDO POSSE) ---
 def upload_para_drive(file_bytes, filename, mime_type, folder_name="imagAppIdoso"):
     try:
         if drive_service is None:
             return None, None
             
+        # Busca a pasta imagAppIdoso
         query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+        results = drive_service.files().list(q=query, fields="files(id, name, owners)").execute()
         folders = results.get('files', [])
         
         if not folders:
-            folder_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-            folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
-            folder_id = folder.get('id')
-        else:
-            folder_id = folders[0]['id']
+            st.error(f"Pasta '{folder_name}' não encontrada no Drive. Verifique se ela foi compartilhada com a Conta de Serviço.")
+            return None, None
             
-        file_metadata = {'name': filename, 'parents': [folder_id]}
+        folder_id = folders[0]['id']
+            
+        # Metadados do arquivo (Salvando dentro da sua pasta)
+        file_metadata = {
+            'name': filename,
+            'parents': [folder_id]
+        }
+        
         media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=True)
+        
+        # Envia o arquivo para a pasta
         file_uploaded = drive_service.files().create(
-            body=file_metadata, media_body=media, fields='id, webViewLink'
+            body=file_metadata,
+            media_body=media,
+            fields='id, webViewLink'
         ).execute()
         
         file_id = file_uploaded.get('id')
-        permission = {'type': 'anyone', 'role': 'reader'}
+        
+        # Torna o arquivo acessível publicamente para exibir miniaturas no Streamlit
+        permission = {
+            'type': 'anyone',
+            'role': 'reader'
+        }
         drive_service.permissions().create(fileId=file_id, body=permission).execute()
         
         link_view = f"https://lh3.googleusercontent.com/d/{file_id}"
