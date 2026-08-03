@@ -41,16 +41,14 @@ def conectar_gsheets():
 
 sh = conectar_gsheets()
 
-# --- FUNÇÃO DE UPLOAD DE IMAGEM VIA IMGBB (GERA URL CURTA COMPATÍVEL COM GOOGLE SHEETS) ---
+# --- FUNÇÃO DE UPLOAD DE IMAGEM VIA IMGBB ---
 def upload_imagem_imgbb(file_bytes):
     try:
-        # Recupera a chave da API do Secrets
         api_key = st.secrets.get("IMGBB_API_KEY", "")
         if not api_key:
             st.error("Chave 'IMGBB_API_KEY' não encontrada no Secrets do Streamlit!")
             return None
 
-        # Otimiza a imagem com PIL antes do upload
         img = Image.open(io.BytesIO(file_bytes))
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
@@ -60,7 +58,6 @@ def upload_imagem_imgbb(file_bytes):
         img.save(buffer, format="JPEG", quality=80, optimize=True)
         img_bytes_compressed = buffer.getvalue()
 
-        # Envia para a API do ImgBB
         url = "https://api.imgbb.com/1/upload"
         payload = {"key": api_key}
         files = {"image": img_bytes_compressed}
@@ -69,7 +66,7 @@ def upload_imagem_imgbb(file_bytes):
         data = response.json()
         
         if response.status_code == 200 and data.get("success"):
-            return data["data"]["url"]  # Retorna a URL curta da imagem
+            return data["data"]["url"]
         else:
             st.error(f"Erro no serviço de hospedagem ImgBB: {data.get('error', {}).get('message', 'Falha no envio')}")
             return None
@@ -77,7 +74,24 @@ def upload_imagem_imgbb(file_bytes):
         st.error(f"Erro ao fazer upload da imagem: {e}")
         return None
 
-# --- FUNÇÕES AUXILIARES COM CACHE DE LEITURA ---
+# --- CONVERTE TODAS AS PÁGINAS DO PDF EM LINKS DE IMAGENS ---
+def processar_pdf_todas_paginas(pdf_bytes):
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        links_paginas = []
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(dpi=120)
+            img_bytes = pix.tobytes("png")
+            url_pag = upload_imagem_imgbb(img_bytes)
+            if url_pag:
+                links_paginas.append(url_pag)
+        # Retorna os links separados por vírgula
+        return "|".join(links_paginas)
+    except Exception as e:
+        st.error(f"Erro ao processar páginas do PDF: {e}")
+        return None
+
+# --- FUNÇÕES AUXILIARES DE BANCO DE DADOS ---
 @st.cache_data(ttl=60)
 def ler_aba(nome_aba):
     try:
@@ -384,6 +398,13 @@ with aba_registros:
     else:
         st.dataframe(df_reg, width="stretch")
 
+# --- MODAL PARA ZOOM DE IMAGEM DA GALERIA ---
+@st.dialog("🔍 Visualização Ampliada da Imagem")
+def modal_zoom_imagem(titulo, url_img, mes, ano):
+    st.subheader(titulo)
+    st.caption(f"📅 Referência: {mes}/{ano}")
+    st.image(url_img, use_column_width=True)
+
 # --- ABA 6: FOTOS, MAPAS E LEGENDAS ---
 with aba_mapa:
     st.markdown("### 🗺️ Galeria de Fotos, Mapas e Legendas")
@@ -435,16 +456,29 @@ with aba_mapa:
         if "created_at" in df_exibir_f.columns:
             df_exibir_f = df_exibir_f.sort_values(by="created_at", ascending=False)
             
-        cols_grid = st.columns(3)
+        cols_grid = st.columns(4) # Miniaturas em 4 colunas
         for i, (_, row_f) in enumerate(df_exibir_f.iterrows()):
-            with cols_grid[i % 3]:
-                if str(row_f.get("link_imagem", "")).strip():
-                    st.image(str(row_f["link_imagem"]), width="stretch")
+            with cols_grid[i % 4]:
                 st.markdown(f"**{row_f.get('titulo', '')}**")
+                if str(row_f.get("link_imagem", "")).strip():
+                    st.image(str(row_f["link_imagem"]), width=220) # Miniatura fixa
                 st.caption(f"📅 Referência: {row_f.get('mes', '')}/{row_f.get('ano', '')}")
+                if st.button("🔍 Expandir / Zoom", key=f"btn_zoom_{i}"):
+                    modal_zoom_imagem(row_f.get('titulo', ''), row_f['link_imagem'], row_f.get('mes', ''), row_f.get('ano', ''))
                 st.markdown("---")
 
-# --- ABA 7: NOTÍCIAS E PUBLICAÇÕES (COM CONVERSÃO DE PDF EM CAPA) ---
+# --- MODAL PARA LEITURA COMPLETA DE PDF (TODAS AS PÁGINAS) ---
+@st.dialog("📄 Leitor do Boletim / Documento Completo", width="large")
+def modal_leitor_pdf(titulo, links_str):
+    st.subheader(titulo)
+    paginas = links_str.split("|")
+    st.info(f"Exibindo todas as {len(paginas)} páginas do documento. Deslize para baixo para ler.")
+    for idx_p, url_pag in enumerate(paginas):
+        st.markdown(f"**Página {idx_p + 1} de {len(paginas)}**")
+        st.image(url_pag, use_column_width=True)
+        st.markdown("---")
+
+# --- ABA 7: NOTÍCIAS E PUBLICAÇÕES (COM SUPORTE MULTI-PÁGINA PDF) ---
 with aba_noticias:
     st.markdown("### 📰 Notícias e Publicações (PDF / Imagem)")
     df_not = ler_aba("noticias_pdf")
@@ -464,31 +498,26 @@ with aba_noticias:
                 
                 if btn_env_n and tit_n and file_n:
                     bytes_n = file_n.read()
-                    url_capa = None
+                    url_paginas = None
                     
                     if file_n.name.lower().endswith('.pdf'):
-                        try:
-                            doc = fitz.open(stream=bytes_n, filetype="pdf")
-                            page = doc[0]
-                            pix = page.get_pixmap(dpi=120)
-                            capa_bytes = pix.tobytes("png")
-                            url_capa = upload_imagem_imgbb(capa_bytes)
-                        except Exception as e:
-                            st.error(f"Erro ao converter a 1ª página do PDF: {e}")
+                        url_paginas = processar_pdf_todas_paginas(bytes_n)
                     else:
-                        url_capa = upload_imagem_imgbb(bytes_n)
+                        url_paginas = upload_imagem_imgbb(bytes_n)
                         
-                    if url_capa:
+                    if url_paginas:
+                        capa = url_paginas.split("|")[0]
                         nova_n = pd.DataFrame([{
                             "titulo": tit_n,
                             "mes": mes_n,
                             "ano": ano_n,
-                            "link_capa": url_capa,
+                            "link_capa": capa,
+                            "todas_paginas": url_paginas,
                             "created_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                         }])
                         df_not = pd.concat([df_not, nova_n], ignore_index=True)
                         if salvar_aba(df_not, "noticias_pdf"):
-                            st.success("Notícia cadastrada com sucesso!")
+                            st.success("Notícia/Boletim cadastrado com todas as páginas!")
                             st.rerun()
 
     col_fn1, col_fn2 = st.columns(2)
@@ -507,13 +536,17 @@ with aba_noticias:
         if "created_at" in df_exibir_n.columns:
             df_exibir_n = df_exibir_n.sort_values(by="created_at", ascending=False)
             
-        cols_n_grid = st.columns(2)
+        cols_n_grid = st.columns(3)
         for idx_n, (_, row_n) in enumerate(df_exibir_n.iterrows()):
-            with cols_n_grid[idx_n % 2]:
+            with cols_n_grid[idx_n % 3]:
                 st.subheader(str(row_n.get("titulo", "")))
-                st.caption(f"📅 Referência: {row_n.get('mes', '')}/{row_n.get('ano', '')}")
                 if str(row_n.get("link_capa", "")).strip():
-                    st.image(str(row_n["link_capa"]), width="stretch")
+                    st.image(str(row_n["link_capa"]), width=240) # Capa em miniatura
+                st.caption(f"📅 Referência: {row_n.get('mes', '')}/{row_n.get('ano', '')}")
+                
+                todas_pags = str(row_n.get("todas_paginas", row_n.get("link_capa", "")))
+                if st.button("📖 Abrir Boletim Completo", key=f"btn_pdf_{idx_n}"):
+                    modal_leitor_pdf(row_n.get('titulo', ''), todas_pags)
                 st.markdown("---")
 
 # --- ABA 8: SOBRE ---
@@ -523,6 +556,6 @@ with aba_sobre:
     **Painel Geral de Gestão - Políticas e Atenção ao Idoso (SP)**
     
     - **Banco de Dados:** Google Sheets
-    - **Armazenamento Mídia:** ImgBB Cloud API
+    - **Mídias e PDFs:** ImgBB Cloud API + Leitor Multi-Página
     - **Modo de Edição:** Protegido por Senha
     """)
