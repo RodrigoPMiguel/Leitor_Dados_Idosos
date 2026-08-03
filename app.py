@@ -75,7 +75,17 @@ def salvar_aba(df, nome_aba):
             
         worksheet.clear()
         
-        df_clean = df.fillna("")
+        # --- CORREÇÃO: CONVERTE DATAS PARA TEXTO ---
+        df_clean = df.copy()
+        for col in df_clean.columns:
+            # Verifica se a coluna contém objetos datetime
+            if pd.api.types.is_datetime64_any_dtype(df_clean[col]):
+                df_clean[col] = df_clean[col].dt.strftime('%d/%m/%Y %H:%M:%S')
+            # Garante que qualquer outro tipo não serializável seja convertido para string
+            else:
+                df_clean[col] = df_clean[col].astype(str)
+        
+        df_clean = df_clean.fillna("")
         dados_lista = [df_clean.columns.values.tolist()] + df_clean.values.tolist()
         worksheet.update(dados_lista)
         return True
