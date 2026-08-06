@@ -214,9 +214,15 @@ def inicializar_planilha_se_vazia():
 
 inicializar_planilha_se_vazia()
 
-# --- LISTAS AUXILIARES ---
+# --- LISTAS AUXILIARES E MAPA DE ORDENAÇÃO DE MESES ---
 MESES = ["Todos", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
 ANOS = ["Todos", "2026", "2025", "2024", "2023"]
+
+MAPA_MESES_NUMERO = {
+    "Janeiro": 1, "Fevereiro": 2, "Março": 3, "Abril": 4,
+    "Maio": 5, "Junho": 6, "Julho": 7, "Agosto": 8,
+    "Setembro": 9, "Outubro": 10, "Novembro": 11, "Dezembro": 12
+}
 
 SENHAS_VALIDAS = ["kico21688", "res1aaa", "res2aaa"]
 
@@ -521,8 +527,10 @@ with aba_mapa:
         if filtro_ano != "Todos" and "ano" in df_exibir_f.columns:
             df_exibir_f = df_exibir_f[df_exibir_f["ano"] == filtro_ano]
             
-        if "created_at" in df_exibir_f.columns:
-            df_exibir_f = df_exibir_f.sort_values(by="created_at", ascending=False)
+        # Ordenação Cronológica (Ano Decrescente e Mês Decrescente)
+        df_exibir_f["mes_num"] = df_exibir_f["mes"].map(MAPA_MESES_NUMERO).fillna(0)
+        df_exibir_f["ano_num"] = pd.to_numeric(df_exibir_f["ano"], errors='coerce').fillna(0)
+        df_exibir_f = df_exibir_f.sort_values(by=["ano_num", "mes_num"], ascending=[False, False])
             
         cols_grid = st.columns(4)
         for i, (original_idx, row_f) in enumerate(df_exibir_f.iterrows()):
@@ -611,8 +619,10 @@ with aba_noticias:
         if filtro_ano_n != "Todos" and "ano" in df_exibir_n.columns:
             df_exibir_n = df_exibir_n[df_exibir_n["ano"] == filtro_ano_n]
             
-        if "created_at" in df_exibir_n.columns:
-            df_exibir_n = df_exibir_n.sort_values(by="created_at", ascending=False)
+        # Ordenação Cronológica (Ano Decrescente e Mês Decrescente)
+        df_exibir_n["mes_num"] = df_exibir_n["mes"].map(MAPA_MESES_NUMERO).fillna(0)
+        df_exibir_n["ano_num"] = pd.to_numeric(df_exibir_n["ano"], errors='coerce').fillna(0)
+        df_exibir_n = df_exibir_n.sort_values(by=["ano_num", "mes_num"], ascending=[False, False])
             
         cols_n_grid = st.columns(3)
         for idx_n, (orig_idx_n, row_n) in enumerate(df_exibir_n.iterrows()):
@@ -642,8 +652,8 @@ with aba_sobre:
     st.markdown("### Sobre o Sistema")
     st.markdown("""
     **Painel Geral de Gestão - Políticas e Atenção ao Idoso (SP)**
-     - Desenvolvido por Rodrigo Prado Miguel e Francisco Miguel Filho
+    - Desenvolvido por Rodrigo Prado Miguel e Francisco Miguel Filho
     - **Banco de Dados:** Google Sheets
-    - **Armazenamento Mídia:** Base64 Integrado
+    - **Mídias e PDFs:** ImgBB Cloud API + Leitor Multi-Página
     - **Modo de Edição:** Protegido por Senha
     """)
