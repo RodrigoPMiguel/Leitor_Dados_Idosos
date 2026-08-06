@@ -606,12 +606,18 @@ with aba_mapa:
 @st.dialog("📄 Leitor do Boletim / Documento Completo", width="large")
 def modal_leitor_pdf(titulo, links_str):
     st.subheader(titulo)
-    paginas = links_str.split("|")
-    st.info(f"Exibindo todas as {len(paginas)} páginas do documento. Deslize para baixo para ler.")
-    for idx_p, url_pag in enumerate(paginas):
-        st.markdown(f"**Página {idx_p + 1} de {len(paginas)}**")
-        st.image(url_pag, use_column_width=True)
-        st.markdown("---")
+    if links_str and isinstance(links_str, str):
+        paginas = [p.strip() for p in links_str.split("|") if p.strip()]
+        st.info(f"Exibindo todas as {len(paginas)} páginas do documento. Deslize para baixo para ler.")
+        for idx_p, url_pag in enumerate(paginas):
+            st.markdown(f"**Página {idx_p + 1} de {len(paginas)}**")
+            if url_pag.startswith("http"):
+                st.image(url_pag, use_container_width=True)
+            else:
+                st.error(f"Erro ao carregar a página {idx_p + 1}.")
+            st.markdown("---")
+    else:
+        st.error("Não foi possível carregar as páginas deste documento.")
 
 # --- ABA 7: NOTÍCIAS E PUBLICAÇÕES ---
 with aba_noticias:
