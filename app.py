@@ -229,10 +229,12 @@ SENHAS_VALIDAS = ["kico21688", "res1aaa", "res2aaa"]
 if "modo_edicao" not in st.session_state:
     st.session_state["modo_edicao"] = False
 
-def df_para_excel(df):
+# --- FUNÇÃO PARA CONVERTER DF PARA EXCEL SELECIONANDO COLUNAS ---
+def df_para_excel(df, colunas_selecionadas=None):
     output = io.BytesIO()
+    df_export = df[colunas_selecionadas].copy() if colunas_selecionadas else df.copy()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Relatorio')
+        df_export.to_excel(writer, index=False, sheet_name='Relatorio')
     return output.getvalue()
 
 # --- BARRA LATERAL ---
@@ -305,7 +307,22 @@ with aba_crono:
                     st.rerun()
         else:
             st.dataframe(df_exibir, width="stretch")
-        st.download_button("📥 Baixar Tabela em Excel", data=df_para_excel(df_exibir), file_name="Cronograma_Distritos.xlsx")
+        
+        # --- EXPORTAÇÃO PERSONALIZADA PARA EXCEL ---
+        st.markdown("---")
+        with st.expander("📥 Exportar Cronograma para Excel (Personalizado)"):
+            cols_crono = st.multiselect(
+                "Selecione as colunas para incluir no relatório Excel:",
+                options=list(df_exibir.columns),
+                default=list(df_exibir.columns),
+                key="ms_cols_crono"
+            )
+            if cols_crono:
+                st.download_button(
+                    "📥 Baixar Cronograma em Excel",
+                    data=df_para_excel(df_exibir, cols_crono),
+                    file_name="Cronograma_Distritos.xlsx"
+                )
 
 # --- ABA 2: SUBPREFEITURAS ---
 with aba_subpref:
@@ -331,7 +348,22 @@ with aba_subpref:
                     st.rerun()
         else:
             st.dataframe(df_sub, width="stretch")
-        st.download_button("📥 Baixar Subprefeituras em Excel", data=df_para_excel(df_sub), file_name="Subprefeituras.xlsx")
+        
+        # --- EXPORTAÇÃO PERSONALIZADA PARA EXCEL ---
+        st.markdown("---")
+        with st.expander("📥 Exportar Subprefeituras para Excel (Personalizado)"):
+            cols_sub = st.multiselect(
+                "Selecione as colunas para incluir no relatório Excel:",
+                options=list(df_sub.columns),
+                default=list(df_sub.columns),
+                key="ms_cols_sub"
+            )
+            if cols_sub:
+                st.download_button(
+                    "📥 Baixar Subprefeituras em Excel",
+                    data=df_para_excel(df_sub, cols_sub),
+                    file_name="Subprefeituras.xlsx"
+                )
 
 # --- MODAL PARA DETALHES DO CONSELHEIRO ---
 @st.dialog("👤 Ficha Cadastral do Conselheiro", width="medium")
@@ -452,25 +484,42 @@ with aba_anotacoes:
 with aba_registros:
     st.markdown("### Registros Gerais e Casas de Repouso")
     df_reg = ler_aba("registros_base")
-    if st.session_state["modo_edicao"]:
-        with st.expander("➕ Adicionar Nova Coluna na Base de Registros", expanded=False):
-            nova_col_reg = st.text_input("Nome da Nova Coluna (Registros):", key="in_col_reg")
-            if st.button("➕ Criar Coluna", key="btn_add_reg") and nova_col_reg:
-                if nova_col_reg not in df_reg.columns:
-                    df_reg[nova_col_reg] = ""
-                    if salvar_aba(df_reg, "registros_base"):
-                        st.success(f"Coluna '{nova_col_reg}' criada com sucesso!")
-                        st.rerun()
-                else:
-                    st.warning("Essa coluna já existe na tabela.")
+    if not df_reg.empty:
+        if st.session_state["modo_edicao"]:
+            with st.expander("➕ Adicionar Nova Coluna na Base de Registros", expanded=False):
+                nova_col_reg = st.text_input("Nome da Nova Coluna (Registros):", key="in_col_reg")
+                if st.button("➕ Criar Coluna", key="btn_add_reg") and nova_col_reg:
+                    if nova_col_reg not in df_reg.columns:
+                        df_reg[nova_col_reg] = ""
+                        if salvar_aba(df_reg, "registros_base"):
+                            st.success(f"Coluna '{nova_col_reg}' criada com sucesso!")
+                            st.rerun()
+                    else:
+                        st.warning("Essa coluna já existe na tabela.")
 
-        df_edit_r = st.data_editor(df_reg, num_rows="dynamic", key="editor_reg", width="stretch")
-        if st.button("💾 Salvar Registros"):
-            if salvar_aba(df_edit_r, "registros_base"):
-                st.success("Base de registros salva!")
-                st.rerun()
-    else:
-        st.dataframe(df_reg, width="stretch")
+            df_edit_r = st.data_editor(df_reg, num_rows="dynamic", key="editor_reg", width="stretch")
+            if st.button("💾 Salvar Registros"):
+                if salvar_aba(df_edit_r, "registros_base"):
+                    st.success("Base de registros salva!")
+                    st.rerun()
+        else:
+            st.dataframe(df_reg, width="stretch")
+
+        # --- EXPORTAÇÃO PERSONALIZADA PARA EXCEL (NOVA FUNCIONALIDADE) ---
+        st.markdown("---")
+        with st.expander("📥 Exportar Base de Registros para Excel (Personalizado)"):
+            cols_reg = st.multiselect(
+                "Selecione as colunas para incluir no relatório Excel:",
+                options=list(df_reg.columns),
+                default=list(df_reg.columns),
+                key="ms_cols_reg"
+            )
+            if cols_reg:
+                st.download_button(
+                    "📥 Baixar Base de Registros em Excel",
+                    data=df_para_excel(df_reg, cols_reg),
+                    file_name="Registros_Casas_Repouso.xlsx"
+                )
 
 # --- MODAL PARA ZOOM DE IMAGEM DA GALERIA ---
 @st.dialog("🔍 Visualização Ampliada da Imagem")
